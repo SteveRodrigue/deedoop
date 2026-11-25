@@ -52,19 +52,37 @@
   {% if f.groups %}
   <ul>
     {% for g in f.groups %}
-    <li><a href="/duplicates?method={{ g.method }}&group={{ g.id }}">{{ "Exact copy" if g.method == "exact" else "Same photo, different metadata" }}</a>:
+    <li><a href="/duplicates?method={{ g.method }}&group={{ g.id }}">{{ {"exact": "Exact copy", "image": "Same photo, different metadata", "similar": "Similar photo"}[g.method] }}</a>:
       {{ g.copies }} copies, {{ g.wasted | bytes }} reclaimable</li>
     {% endfor %}
   </ul>
   {% else %}<p class="muted">This file has no known duplicates.</p>{% endif %}
 </section>
 
+{% if similar %}
+<section class="card">
+  <h2>Similar photos</h2>
+  <div class="photos">
+    {% for p in similar %}
+    <div class="photo">
+      {% if p.thumb %}<a href="/file/{{ p.id }}"><img class="thumb m" loading="lazy" src="/thumb/{{ p.id }}" alt=""></a>{% endif %}
+      <div class="meta"><div><a href="/file/{{ p.id }}" title="{{ p.user_path }}">{{ p.name }}</a></div>
+        <div class="muted" title="{{ p.user_path }}">{{ p.folder }}</div>
+        <div>{{ p.size | bytes }}{% if p.dims %} · {{ p.dims }}{% endif %} · distance {{ p.pdist }}</div></div>
+    </div>
+    {% endfor %}
+  </div>
+  <p class="small"><a href="/review">Review similar photos</a></p>
+</section>
+{% endif %}
+
 <section class="card">
   <h2>Hashes</h2>
   {% if f.hashes %}
   <dl class="kv">
     {% set names = {"partial": "Quick hash (xxh3-128, first and last 64 KB)", "blake3": "Content (BLAKE3)",
-                    "img_exact": "Image data (BLAKE3, metadata ignored)", "img_none": "Image data"} %}
+                    "img_exact": "Image data (BLAKE3, metadata ignored)", "img_none": "Image data",
+                    "phash": "Perceptual hash (pHash)", "dhash": "Perceptual hash (dHash)", "sim_none": "Perceptual hash"} %}
     {% for k, v in f.hashes.items() %}<dt>{{ names.get(k, k) }}</dt><dd class="mono">{{ v }}</dd>{% endfor %}
   </dl>
   {% else %}<p class="muted">Not hashed: no other file has the same size.</p>{% endif %}

@@ -13,7 +13,7 @@ after a date fix, a GPS tag or a rename by a photo manager).
   are hashed together with the pixel format and size.
 
 The two kinds use different prefixes, so a JPEG never matches a PNG.
-Re-compressed or resized copies do not match here; that is milestone 4.
+Re-compressed or resized copies do not match here; see :mod:`deedup.similar`.
 """
 
 from __future__ import annotations
@@ -126,13 +126,30 @@ def image_hash_for(ext: str, data: bytes) -> bytes:
     return pixel_hash(data)
 
 
-def read_and_hash_image(path: str, ext: str, exp: Expected, checkpoint=None) -> dict[str, bytes]:
-    """Read an image once and return its partial, BLAKE3 and image-data hashes.
+def read_and_hash_image(path: str, ext: str, exp: Expected, checkpoint=None,
+                        similar: bool = False) -> dict[str, bytes]:
+    """Read an image once and return its partial, BLAKE3 and image-data hashes,
+    and with ``similar`` its perceptual hashes.
 
     Image-data hashing needs every byte anyway, so the exact-match hashes come
     from the same read for free. If the image does not decode, the exact
     hashes are still returned and ``img_error`` holds the reason.
     """
+    data = read_image_bytes(path, exp, checkpoint)
+    out: dict[str, bytes] = {"blake3": blake3.blake3(data).digest(), "partial": partial_from_bytes(data)}
+    try:
+        out["img_exact"] = image_hash_for(ext, data)
+    except NotAnImage as e:
+        out["img_error"] = str(e).encode()
+    if similar and "img_exact" in out:
+        from .similar import similar_hashes
+
+        out.update(similar_hashes(data))
+    return out
+
+
+def read_image_bytes(path: str, exp: Expected, checkpoint=None) -> bytes:
+    """The whole file, checked against the size and mtime in the index."""
     if exp.size > MAX_IMAGE_BYTES:
         raise NotAnImage("too large to hash as an image")
     fd = _open(path)
@@ -154,13 +171,7 @@ def read_and_hash_image(path: str, ext: str, exp: Expected, checkpoint=None) -> 
         _drop_cache(fd)
     finally:
         os.close(fd)
-    data = b"".join(chunks)
-    out: dict[str, bytes] = {"blake3": blake3.blake3(data).digest(), "partial": partial_from_bytes(data)}
-    try:
-        out["img_exact"] = image_hash_for(ext, data)
-    except NotAnImage as e:
-        out["img_error"] = str(e).encode()
-    return out
+    return b"".join(chunks)
 
 
 def partial_from_bytes(data: bytes) -> bytes:

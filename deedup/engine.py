@@ -38,16 +38,17 @@ from .categories import group_category
 from .control import Control, Status
 from .discovery import natural_key, sync_share_roots
 from .hashing import Expected, FileChanged, full_hash, partial_hash
-from .imaging import IMAGE_HASH_EXTS, MAX_IMAGE_BYTES, NotAnImage, read_and_hash_image
+from .imaging import IMAGE_HASH_EXTS, MAX_IMAGE_BYTES, NotAnImage, read_and_hash_image, read_image_bytes
 from .metadata import METADATA_EXTS, Reader, exiftool_available
 from .scanner import Excluder, walk_root
+from .similar import DEFAULT_THRESHOLD, MAX_DISTANCE, rebuild_pairs, rebuild_similar_groups, similar_hashes
 
 log = logging.getLogger("deedup.engine")
 
 FLUSH_SECONDS = 2.0
 META_BATCH = 100
 # Phases whose progress is shown in bytes rather than files.
-BYTE_PHASES = {"hash_full", "hash_image", "archives"}
+BYTE_PHASES = {"hash_full", "hash_image", "hash_similar", "archives"}
 
 
 @dataclass
@@ -127,8 +128,12 @@ def run_scan(ctx: ScanContext) -> dict:
         run_phase("archives", archive_candidates(conn, settings), archive_disk)
         run_phase("sidecars", loose_json_candidates(conn, settings), json_disk)
         # 3. photos: one full read gives the image-data hash and the exact hashes
-        if settings["image_matching"]:
+        similar = bool(settings["similar_matching"])
+        if settings["image_matching"] or similar:
             run_phase("hash_image", _image_candidates(conn, min_size), _hash_disk)
+        # 3b. perceptual hashes for photos indexed before similar matching was on
+        if similar:
+            run_phase("hash_similar", _similar_candidates(conn, min_size), _hash_disk)
         # 4. metadata: headers only, through ExifTool
         if settings["metadata"]:
             if exiftool_available():
@@ -145,7 +150,16 @@ def run_scan(ctx: ScanContext) -> dict:
         img = rebuild_image_groups(conn, min_size) if settings["image_matching"] else _drop_groups(conn, "image")
         summary.update({"image_groups": img["groups"], "image_wasted": img["wasted"]})
         summary["sidecars"] = pair_sidecars(conn)
-        refresh_coverage(conn)
+        threshold = similar_threshold(settings)
+        if similar:
+            st.set(phase="similar")
+            summary["similar_pairs"] = rebuild_pairs(conn)
+            sim = rebuild_similar_groups(conn, threshold)
+            summary.update({"similar_groups": sim["groups"], "similar_wasted": sim["wasted"]})
+        else:
+            _drop_groups(conn, "similar")
+            conn.execute("DELETE FROM similar_pairs")
+        refresh_coverage(conn, threshold if similar else None)
         summary["archives"] = conn.execute("SELECT COUNT(*) FROM archives").fetchone()[0]
         st.set(phase="done")
         return summary
@@ -206,6 +220,27 @@ def _image_candidates(conn: sqlite3.Connection, min_size: int) -> list[sqlite3.R
         ORDER BY live.disk, live.dev, live.inode
     """
     return conn.execute(sql.replace(":min", "?"), [min_size, *exts]).fetchall()
+
+
+def _similar_candidates(conn: sqlite3.Connection, min_size: int) -> list[sqlite3.Row]:
+    exts = sorted(IMAGE_HASH_EXTS)
+    live = _LIVE.format(extra=", f.ext", join="")
+    sql = f"""
+        WITH live AS ({live} AND f.container_id = 0 AND f.ext IN ({",".join("?" * len(exts))})
+                      AND f.size <= {MAX_IMAGE_BYTES})
+        SELECT * FROM live
+        WHERE EXISTS (SELECT 1 FROM hashes h WHERE h.file_id = live.id AND h.kind = 'img_exact')
+          AND NOT EXISTS (SELECT 1 FROM hashes h WHERE h.file_id = live.id AND h.kind IN ('phash', 'sim_none'))
+        ORDER BY live.disk, live.dev, live.inode
+    """
+    return conn.execute(sql.replace(":min", "?"), [min_size, *exts]).fetchall()
+
+
+def similar_threshold(settings: dict) -> int:
+    try:
+        return max(0, min(int(settings["similar_threshold"]), MAX_DISTANCE))
+    except (TypeError, ValueError):
+        return DEFAULT_THRESHOLD
 
 
 def _metadata_candidates(conn: sqlite3.Connection) -> list[sqlite3.Row]:
@@ -271,7 +306,8 @@ def _hash_disk(ctx: ScanContext, disk: str, phase: str, rows: list[sqlite3.Row],
         pending, errors = [], []
         last_flush = time.monotonic()
 
-    st.disk(disk, state={"hash_partial": "hashing", "hash_image": "reading photos"}.get(phase, "reading"))
+    st.disk(disk, state={"hash_partial": "hashing", "hash_image": "reading photos",
+                         "hash_similar": "reading photos"}.get(phase, "reading"))
     try:
         for row in rows:
             control.checkpoint()
@@ -285,8 +321,12 @@ def _hash_disk(ctx: ScanContext, disk: str, phase: str, rows: list[sqlite3.Row],
             st.disk(disk, current=path)
             exp = Expected(row["size"], row["mtime_ns"])
             try:
-                if phase == "hash_image":
-                    got = read_and_hash_image(path, row["ext"], exp, checkpoint=control.checkpoint)
+                if phase == "hash_similar":
+                    values = list(similar_hashes(read_image_bytes(path, exp, control.checkpoint)).items())
+                    st.add(disk, "done_bytes", row["size"])
+                elif phase == "hash_image":
+                    got = read_and_hash_image(path, row["ext"], exp, checkpoint=control.checkpoint,
+                                              similar=bool(settings["similar_matching"]))
                     err = got.pop("img_error", None)
                     values = list(got.items()) + ([("img_none", err)] if err else [])
                     st.add(disk, "done_bytes", row["size"])

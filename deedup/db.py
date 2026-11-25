@@ -61,7 +61,7 @@ MIGRATIONS: list[str] = [
 
     CREATE TABLE groups (
         id          INTEGER PRIMARY KEY,
-        method      TEXT NOT NULL,          -- 'exact', 'image' (later: 'fuzzy')
+        method      TEXT NOT NULL,          -- 'exact', 'image', 'similar'
         key         TEXT NOT NULL,
         size        INTEGER NOT NULL,       -- size of one copy
         file_count  INTEGER NOT NULL,       -- paths in the group
@@ -189,6 +189,34 @@ MIGRATIONS: list[str] = [
         DELETE FROM files WHERE container_id = OLD.id;
     END;
     """,
+    # v4: similar photos (milestone 4)
+    """
+    CREATE TABLE similar_pairs (
+        a      INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+        b      INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+        pdist  INTEGER NOT NULL,          -- pHash Hamming distance
+        ddist  INTEGER NOT NULL,          -- dHash Hamming distance
+        PRIMARY KEY (a, b)
+    ) WITHOUT ROWID;
+    CREATE INDEX similar_pairs_b ON similar_pairs(b);
+
+    -- Review decisions, keyed by the two photos' image-data hashes so they
+    -- survive rescans, renames and moves.
+    CREATE TABLE reviews (
+        key_a       BLOB NOT NULL,
+        key_b       BLOB NOT NULL,
+        decision    TEXT NOT NULL,        -- keep_a, keep_b, both, not_dup, later
+        keep        BLOB,                 -- image-data hash of the copy to keep
+        decided_at  REAL NOT NULL,
+        PRIMARY KEY (key_a, key_b)
+    ) WITHOUT ROWID;
+
+    ALTER TABLE groups ADD COLUMN score INTEGER;       -- similar: closest pHash distance
+    ALTER TABLE groups ADD COLUMN pending INTEGER;     -- similar: pairs still to review
+    ALTER TABLE archives ADD COLUMN cov_similar INTEGER;
+    -- Archives indexed before perceptual hashes existed are read once more.
+    ALTER TABLE archives ADD COLUMN version INTEGER NOT NULL DEFAULT 1;
+    """,
 ]
 
 DEFAULT_SETTINGS: dict[str, Any] = {
@@ -211,6 +239,8 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     # Match methods. Exact content is always on.
     "image_matching": True,   # same photo, different metadata
     "metadata": True,         # read date taken, camera, size, GPS with ExifTool
+    "similar_matching": True,  # similar photos: recompressed or resized copies, reviewed by you
+    "similar_threshold": 8,    # largest pHash distance (0-10) shown as similar
     # Files smaller than this are ignored by the duplicate finder.
     "min_size": 1,
     # 'single': one disk at a time. 'parallel': up to parallel_disks at once.

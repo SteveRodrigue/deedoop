@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Archives · deedup{% endblock %}
-{% macro covbar(e) %}{% set n = e.members or 1 %}<div class="cov" title="{{ e.exact }} already on disk, {{ e.image }} same photo on disk, {{ e.archive }} only in another archive, {{ e.new }} not on disk yet">
-  <span class="c-exact" style="width:{{ 100 * e.exact / n }}%"></span><span class="c-image" style="width:{{ 100 * e.image / n }}%"></span><span class="c-archive" style="width:{{ 100 * e.archive / n }}%"></span><span class="c-new" style="width:{{ 100 * e.new / n }}%"></span></div>{% endmacro %}
+{% macro covbar(e) %}{% set n = e.members or 1 %}<div class="cov" title="{{ e.exact }} already on disk, {{ e.image }} same photo on disk, {{ e.similar }} similar photo on disk, {{ e.archive }} only in another archive, {{ e.new }} not on disk yet">
+  <span class="c-exact" style="width:{{ 100 * e.exact / n }}%"></span><span class="c-image" style="width:{{ 100 * e.image / n }}%"></span><span class="c-similar" style="width:{{ 100 * e.similar / n }}%"></span><span class="c-archive" style="width:{{ 100 * e.archive / n }}%"></span><span class="c-new" style="width:{{ 100 * e.new / n }}%"></span></div>{% endmacro %}
 {% block content %}
 <section class="card">
   <h2>Archives and Google Takeout</h2>
@@ -10,6 +10,7 @@
   <div class="legend small">
     <span><i class="c-exact"></i>Already on disk</span>
     <span><i class="c-image"></i>Same photo on disk (metadata differs)</span>
+    <span><i class="c-similar"></i>Similar photo on disk (recompressed or resized)</span>
     <span><i class="c-archive"></i>Only in another archive</span>
     <span><i class="c-new"></i>Not on disk yet</span>
   </div>

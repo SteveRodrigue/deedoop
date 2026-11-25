@@ -87,7 +87,10 @@
   <label class="radio"><input type="checkbox" name="metadata" value="1" {{ "checked" if settings.metadata }}>
     Read photo and video metadata <span class="muted small">(date taken, camera, resolution, GPS; headers only)</span></label>
   {% if not exiftool %}<p class="flash err">ExifTool is not installed in this container, so metadata is skipped.</p>{% endif %}
-  <p class="muted small">Similar photos (recompressed or resized copies) arrive in milestone 4.</p>
+  <label class="radio"><input type="checkbox" name="similar_matching" value="1" {{ "checked" if settings.similar_matching }}>
+    Similar photos <span class="muted small">(recompressed or resized copies such as Google “Storage saver”; you review every match)</span></label>
+  <label>Match closeness <input type="number" name="similar_threshold" min="0" max="10" value="{{ settings.similar_threshold }}" style="width:5em">
+    <span class="muted small">0 to 10, default 8; lower is stricter</span></label>
 </section>
 
 <section class="card" id="disk-mode">

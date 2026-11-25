@@ -1,13 +1,14 @@
 {% extends "base.html" %}
 {% block title %}{{ label }} · deedup{% endblock %}
-{% macro covbar(e) %}{% set n = e.members or 1 %}<div class="cov" title="{{ e.exact }} already on disk, {{ e.image }} same photo on disk, {{ e.archive }} only in another archive, {{ e.new + e.unreadable }} not on disk yet">
-  <span class="c-exact" style="width:{{ 100 * e.exact / n }}%"></span><span class="c-image" style="width:{{ 100 * e.image / n }}%"></span><span class="c-archive" style="width:{{ 100 * e.archive / n }}%"></span><span class="c-new" style="width:{{ 100 * (e.new + e.unreadable) / n }}%"></span></div>{% endmacro %}
+{% macro covbar(e) %}{% set n = e.members or 1 %}<div class="cov" title="{{ e.exact }} already on disk, {{ e.image }} same photo on disk, {{ e.similar }} similar photo on disk, {{ e.archive }} only in another archive, {{ e.new + e.unreadable }} not on disk yet">
+  <span class="c-exact" style="width:{{ 100 * e.exact / n }}%"></span><span class="c-image" style="width:{{ 100 * e.image / n }}%"></span><span class="c-similar" style="width:{{ 100 * e.similar / n }}%"></span><span class="c-archive" style="width:{{ 100 * e.archive / n }}%"></span><span class="c-new" style="width:{{ 100 * (e.new + e.unreadable) / n }}%"></span></div>{% endmacro %}
 {% block content %}
 <section class="card">
   <p class="small"><a href="/archives">← All archives</a></p>
   <h2 style="overflow-wrap:anywhere">{{ label }}</h2>
   <p><strong>{{ "{:,}".format(total) }}</strong> files inside;
-    <strong>{{ "{:,}".format(counts.exact + counts.image) }}</strong> already on your disks and
+    <strong>{{ "{:,}".format(counts.exact + counts.image) }}</strong> already on your disks,
+    {% if counts.similar %}<strong>{{ "{:,}".format(counts.similar) }}</strong> as a similar photo (recompressed or resized),{% endif %}
     <strong>{{ "{:,}".format(counts.new + counts.unreadable) }}</strong> ({{ new_bytes | bytes }}) not on disk yet.
     {% if counts.archive %}{{ "{:,}".format(counts.archive) }} exist only in another archive.{% endif %}</p>
   <details>

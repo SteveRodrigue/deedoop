@@ -33,6 +33,11 @@
   {% if flt.method == "exact" %}
   <p><strong>{{ "{:,}".format(total) }}</strong> groups of byte-identical files, <strong>{{ wasted | bytes }}</strong> reclaimable.
     <span class="muted small">Sorted by reclaimable space. Hardlinked paths share one copy on disk, and copies inside archives can't be removed on their own, so neither counts as waste.</span></p>
+  {% elif flt.method == "similar" %}
+  <p><strong>{{ "{:,}".format(total) }}</strong> groups of similar photos, <strong>{{ wasted | bytes }}</strong> possibly reclaimable.
+    <span class="muted small">Recompressed or resized copies. These are suggestions: check them in the <a href="/review">review queue</a>;
+    they are not counted in the dashboard total. The suggested keeper has the highest resolution, then the largest file.</span></p>
+  {% if not settings.similar_matching %}<p class="flash err">Similar photos are turned off on the Setup screen.</p>{% endif %}
   {% else %}
   <p><strong>{{ "{:,}".format(total) }}</strong> photos stored more than once with different metadata, <strong>{{ wasted | bytes }}</strong> reclaimable.
     <span class="muted small">The image data is identical; only EXIF, XMP, GPS, dates or embedded thumbnails differ.
@@ -41,15 +46,17 @@
   {% endif %}
 </section>
 
+{% set photo_grid = flt.method in ("image", "similar") %}
 {% for g in groups %}{% set ms = members[g.id] %}
-<details class="group card" {{ "open" if loop.index <= (6 if flt.method == "image" else 3) }}>
+<details class="group card" {{ "open" if loop.index <= (6 if photo_grid else 3) }}>
   <summary>
     <span class="wasted">{{ g.wasted | bytes }}</span>
     <span>{{ g.copies }} copies{% if flt.method == "exact" %} of {{ g.size | bytes }}{% endif %}</span>
     <span class="pill">{{ g.category }}</span>
+    {% if flt.method == "similar" %}{% if g.pending %}<a class="pill warn" href="/review">{{ g.pending }} to review</a>{% else %}<span class="pill ok">reviewed</span>{% endif %}{% endif %}
     <span class="path muted" title="{{ ms[0].user_path }}">{{ ms[0].user_path }}</span>
   </summary>
-  {% if flt.method == "image" %}
+  {% if photo_grid %}
   <div class="photos" style="margin-top:10px">
     {% for m in ms %}
     <div class="photo">
@@ -57,6 +64,7 @@
       <div class="meta">
         <div title="{{ m.user_path }}"><a href="/file/{{ m.file_id }}">{{ m.user_path.rsplit("/", 1)[-1] }}</a></div>
         <div class="muted" title="{{ m.user_path }}">{{ m.user_path.rsplit("/", 1)[0] }}</div>
+        {% if flt.method == "similar" and m.keeper %}<div><span class="pill ok">suggested keeper</span></div>{% endif %}
         <div>{{ m.disk }} {% if m.hardlinked %}<span class="pill">hardlink</span>{% endif %}{% if m.in_archive %}<span class="pill" title="Inside an archive; not counted as reclaimable">in archive</span>{% endif %}</div>
         <div><span class="{{ 'differs' if 'size' in m.differs }}">{{ m.size | bytes }}</span>
           {% if m.dims %}· <span class="{{ 'differs' if 'dims' in m.differs }}">{{ m.dims }}</span>{% endif %}</div>

@@ -24,3 +24,12 @@
   });
   apply(get());
 })();
+
+// Review queue: K keep left, J keep right, B keep both, N not the same photo, S decide later.
+document.addEventListener("keydown", function (ev) {
+  if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
+  var t = ev.target;
+  if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)) return;
+  var b = document.querySelector('[data-review] button[data-key="' + ev.key.toLowerCase() + '"]');
+  if (b && !b.disabled) { ev.preventDefault(); b.click(); }
+});

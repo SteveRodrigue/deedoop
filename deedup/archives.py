@@ -34,6 +34,7 @@ from .hashing import EDGE, SMALL, Expected, FileChanged, _open
 from .imaging import IMAGE_HASH_EXTS, MAX_IMAGE_BYTES, NotAnImage, image_hash_for
 from .metadata import Media, camera_name, normalise_date
 from .scanner import ext_of
+from .similar import similar_hashes
 
 TAR_SUFFIXES = (".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz2", ".tbz", ".tar.xz", ".txz")
 ARCHIVE_EXTS = {"zip", "7z", "tar", "gz", "tgz", "bz2", "tbz2", "tbz", "xz", "txz"}
@@ -144,6 +145,7 @@ def _finish(m: Member, sink: Sink, depth: int, checkpoint) -> Member:
     if data is not None and ext in IMAGE_HASH_EXTS:
         try:
             m.hashes["img_exact"] = image_hash_for(ext, data)
+            m.hashes.update(similar_hashes(data))
         except NotAnImage as e:
             m.hashes["img_none"] = str(e).encode()
         m.media = pillow_media(data)

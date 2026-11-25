@@ -12,6 +12,7 @@
   --bar: #9db9ef;
   --hl: #fff3c4;
   --thumb-bg: #eceef2;
+  --similar: #8b5cf6;
   color-scheme: light;
 }
 /* Dark theme: the system setting, unless the toggle says light; or the toggle says dark. */
@@ -30,6 +31,7 @@
     --bar: #36558f;
     --hl: #4a3f12;
     --thumb-bg: #232a36;
+  --similar: #a78bfa;
     color-scheme: dark;
   }
 }
@@ -47,6 +49,7 @@
   --bar: #36558f;
   --hl: #4a3f12;
   --thumb-bg: #232a36;
+  --similar: #a78bfa;
   color-scheme: dark;
 }
 * { box-sizing: border-box; }
@@ -151,6 +154,20 @@ details.group .path { flex: 1; }
 .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
 .status-tabs a { white-space: nowrap; }
 
+/* Review queue: two photos side by side. */
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.side { border: 1px solid var(--line); border-radius: 10px; padding: 10px; min-width: 0; }
+.side.keeper { border-color: var(--ok); box-shadow: 0 0 0 1px var(--ok) inset; }
+.side .thumb.l { width: 100%; height: auto; max-height: 42vh; object-fit: contain; }
+.side .kv { margin-top: 6px; font-size: 13px; row-gap: 2px; }
+.side .kv dd { overflow-wrap: anywhere; }
+.decide { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.decide kbd { font: 11px/1 ui-monospace, monospace; border: 1px solid var(--line); border-bottom-width: 2px;
+  border-radius: 4px; padding: 2px 5px; margin-left: 6px; color: inherit; border-color: currentColor; opacity: .65; }
+button.danger { background: transparent; color: var(--err); border: 1px solid var(--err); }
+.c-similar { background: var(--similar); }
+.thumb.xs { width: 56px; height: 56px; }
+
 @media (max-width: 640px) {
   .theme { margin-left: 0; }
   .photos { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
@@ -165,5 +182,9 @@ details.group .path { flex: 1; }
   .members td.path { white-space: normal; word-break: break-all; max-width: none; }
   .members .col-mtime { display: none; }
   .cov { min-width: 48px; }
+  .pair { gap: 8px; }
+  .side { padding: 6px; }
+  .side .kv { grid-template-columns: 1fr; font-size: 12px; }
+  .decide kbd { display: none; }
   .hide-phone { display: none; }
 }
