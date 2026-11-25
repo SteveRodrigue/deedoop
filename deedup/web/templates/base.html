@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}deedup{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+  <script src="/static/htmx.min.js" defer></script>
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="/"><img src="/static/icon.svg" alt="" width="22" height="22"> deedup</a>
+  <nav>
+    <a href="/" class="{{ 'on' if nav == 'dashboard' }}">Dashboard</a>
+    <a href="/duplicates" class="{{ 'on' if nav == 'duplicates' }}">Duplicates</a>
+    <a href="/same-path" class="{{ 'on' if nav == 'same_path' }}">Checks</a>
+    <a href="/setup" class="{{ 'on' if nav == 'setup' }}">Setup</a>
+  </nav>
+  <span class="ro" title="Milestone 1 is report-only: the container mounts /mnt read-only and never changes your files.">read-only</span>
+</header>
+<main>
+{% block content %}{% endblock %}
+</main>
+<footer>deedup {{ version }} · dedupe your hoard, safely</footer>
+</body>
+</html>

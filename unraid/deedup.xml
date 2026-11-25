@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>deedup</Name>
+  <Repository>ghcr.io/steverodrigue/deedup:latest</Repository>
+  <Registry>https://github.com/SteveRodrigue/deedup/pkgs/container/deedup</Registry>
+  <Network>bridge</Network>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/SteveRodrigue/deedup/issues</Support>
+  <Project>https://github.com/SteveRodrigue/deedup</Project>
+  <Overview>deedup: dedupe your hoard, safely. Finds duplicate files across your Unraid disks by content, whatever their names. Milestone 1 is report-only: /mnt is mounted read-only.</Overview>
+  <Category>Tools: Backup:</Category>
+  <WebUI>http://[IP]:[PORT:8080]/</WebUI>
+  <Icon>https://raw.githubusercontent.com/SteveRodrigue/deedup/main/deedup/web/static/icon.svg</Icon>
+  <ExtraParams>--user 99:100</ExtraParams>
+  <Config Name="Web UI port" Target="8080" Default="8080" Mode="tcp" Description="Port for the web UI" Type="Port" Display="always" Required="true" Mask="false">8080</Config>
+  <Config Name="Disks and shares (read-only)" Target="/mnt" Default="/mnt" Mode="ro,slave" Description="Host /mnt, mounted READ-ONLY. deedup reads /mnt/diskN and pools directly." Type="Path" Display="always" Required="true" Mask="false">/mnt</Config>
+  <Config Name="Appdata" Target="/config" Default="/mnt/user/appdata/deedup" Mode="rw" Description="Index database. Put it on the cache pool." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/deedup</Config>
+  <Config Name="Password" Target="DEEDUP_PASSWORD" Default="" Mode="" Description="Optional. Turns on basic auth for the web UI (user name: deedup)." Type="Variable" Display="always" Required="false" Mask="true"></Config>
+</Container>

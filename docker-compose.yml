@@ -1,0 +1,13 @@
+# Example for running deedup outside the Unraid template.
+services:
+  deedup:
+    image: ghcr.io/steverodrigue/deedup:latest
+    container_name: deedup
+    ports:
+      - "8080:8080"
+    volumes:
+      - /mnt:/mnt:ro,rslave          # read-only: deedup never changes your files in milestone 1
+      - /mnt/user/appdata/deedup:/config
+    # environment:
+    #   DEEDUP_PASSWORD: change-me   # optional basic auth, user name "deedup"
+    restart: unless-stopped

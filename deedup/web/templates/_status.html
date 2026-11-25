@@ -1,0 +1,70 @@
+{# Live scan status. Polled by htmx every 2 s while a job is active. #}
+<div id="status" {% if active %}hx-get="/partials/status" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>
+{% if active %}
+  {% set phase_names = {"starting": "Starting", "walk": "Walking folders", "hash_partial": "Quick hashing same-size files",
+                        "hash_full": "Full hashing likely duplicates", "group": "Building duplicate groups", "done": "Finishing"} %}
+  <div class="row between">
+    <div>
+      <strong>{{ "Benchmark" if active.type == "benchmark" else "Scan" }} #{{ active.id }}</strong>
+      {% if active.state == "queued" and not live %}<span class="pill">queued</span>
+      {% elif paused %}<span class="pill warn">paused</span>
+      {% else %}<span class="pill ok">running</span>{% endif %}
+      {% if live.phase %}· {{ phase_names.get(live.phase, live.phase) }}{% endif %}
+      {% if live.step %}· {{ live.step }}{% endif %}
+      {% if elapsed %}<span class="muted">· {{ elapsed }}</span>{% endif %}
+      {% if live.mode %}<span class="muted">· {{ "one disk at a time" if live.mode == "single" else "parallel disks (" ~ settings.parallel_disks ~ ")" }}</span>{% endif %}
+    </div>
+    <div class="row">
+      {% if paused %}
+      <form method="post" action="/scan/resume"><button>Resume</button></form>
+      {% else %}
+      <form method="post" action="/scan/pause"><button>Pause</button></form>
+      {% endif %}
+      <form method="post" action="/scan/stop"><button class="secondary">Stop</button></form>
+    </div>
+  </div>
+  {% if live.disks %}
+  <table class="disks">
+    <thead><tr><th>Disk</th><th>State</th><th class="num">Files walked</th><th class="num">New / changed</th><th>Hashing</th><th>Current</th></tr></thead>
+    <tbody>
+    {% for name in live.get("disks_order", live.disks.keys()) %}{% set d = live.disks.get(name, {}) %}
+      <tr>
+        <td>{{ name }}</td>
+        <td><span class="pill {{ 'ok' if d.state in ('walking','hashing','reading') }}">{{ d.state or "waiting" }}</span></td>
+        <td class="num">{{ "{:,}".format(d.walked or 0) }}</td>
+        <td class="num">{{ "{:,}".format(d.new or 0) }} / {{ "{:,}".format(d.changed or 0) }}</td>
+        <td>
+          {% if d.todo_files %}
+            {% if d.todo_bytes %}
+              {% set pct = (100 * (d.done_bytes or 0) / d.todo_bytes) | round(1) %}
+              <progress max="100" value="{{ pct }}"></progress> {{ pct }}% of {{ d.todo_bytes | bytes }}
+            {% else %}
+              {% set pct = (100 * (d.done_files or 0) / d.todo_files) | round(1) %}
+              <progress max="100" value="{{ pct }}"></progress> {{ "{:,}".format(d.done_files or 0) }} / {{ "{:,}".format(d.todo_files) }} files
+            {% endif %}
+          {% endif %}
+        </td>
+        <td class="path" title="{{ d.current }}">{{ d.current }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+{% else %}
+  <div class="row between">
+    <div>
+      {% if last %}
+        Last {{ last.type }} #{{ last.id }}: <span class="pill {{ 'ok' if last.state == 'done' else 'warn' }}">{{ last.state }}</span>
+        <span class="muted">finished {{ last.finished_at | time }}</span>
+        {% if last.error %}<div class="muted small">{{ last.error.splitlines()[0] }}</div>{% endif %}
+        {% set r = last_progress.get("result", {}) %}
+        {% if r.groups is defined %}<div class="small">{{ "{:,}".format(r.groups) }} duplicate groups, {{ r.wasted | bytes }} reclaimable.</div>{% endif %}
+      {% else %}
+        No scan yet.
+      {% endif %}
+      {% if settings.schedule_enabled %}<div class="small muted">Scheduled daily {{ settings.schedule_start }} to {{ settings.schedule_end }}.</div>{% endif %}
+    </div>
+    <form method="post" action="/scan/start"><button>Start scan</button></form>
+  </div>
+{% endif %}
+</div>

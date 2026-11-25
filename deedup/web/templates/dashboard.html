@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Dashboard · deedup{% endblock %}
+{% block content %}
+{% if not roots %}
+<section class="card callout">
+  <h2>Welcome to deedup</h2>
+  <p>Pick the shares to scan on the <a href="/setup">Setup</a> screen, then start a scan here. deedup only reads your
+  files: milestone 1 reports duplicates and never changes anything.</p>
+</section>
+{% endif %}
+
+<section class="card">
+  <h2>Scan</h2>
+  {% include "_status.html" %}
+</section>
+
+<section class="tiles">
+  <div class="tile"><div class="label">Reclaimable space</div><div class="value">{{ stats.wasted | bytes }}</div>
+    <div class="muted small">exact duplicates, hardlinks counted once</div></div>
+  <div class="tile"><div class="label">Duplicate groups</div><div class="value">{{ "{:,}".format(stats.groups) }}</div>
+    <div class="muted small">{{ "{:,}".format(stats.dup_files) }} files</div></div>
+  <div class="tile"><div class="label">Indexed</div><div class="value">{{ "{:,}".format(stats.files) }}</div>
+    <div class="muted small">files, {{ stats.bytes | bytes }}</div></div>
+  <div class="tile"><div class="label">Index size</div><div class="value">{{ stats.index_bytes | bytes }}</div>
+    <div class="muted small">{{ "{:,}".format(stats.full_hashed) }} files fully hashed</div></div>
+</section>
+
+<div class="cols">
+<section class="card">
+  <h2>Reclaimable by type</h2>
+  {% if by_cat %}
+  {% set top = by_cat[0].wasted or 1 %}
+  <table>
+    {% for r in by_cat %}
+    <tr>
+      <td><a href="/duplicates?category={{ r.category }}">{{ r.category }}</a></td>
+      <td class="barcell"><span class="bar" style="width: {{ (100 * r.wasted / top) | round(1) }}%"></span></td>
+      <td class="num">{{ r.wasted | bytes }}</td>
+      <td class="num muted">{{ "{:,}".format(r.groups) }} group{{ "s" if r.groups != 1 }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}<p class="muted">Nothing yet.</p>{% endif %}
+</section>
+
+<section class="card">
+  <h2>Disks</h2>
+  {% if disks %}
+  <table>
+    <thead><tr><th>Disk</th><th class="num">Files</th><th class="num">Size</th><th>Last walked</th></tr></thead>
+    {% for d in disks %}
+    <tr><td>{{ d.disk }}</td><td class="num">{{ "{:,}".format(d.files) }}</td><td class="num">{{ d.bytes | bytes }}</td>
+      <td class="muted">{{ d.last_scan_at | time }}</td></tr>
+    {% endfor %}
+  </table>
+  {% else %}<p class="muted">No shares selected yet.</p>{% endif %}
+  {% if stats.errors %}<p class="small"><a href="/same-path#errors">{{ stats.errors }} files could not be read</a></p>{% endif %}
+</section>
+</div>
+{% endblock %}
