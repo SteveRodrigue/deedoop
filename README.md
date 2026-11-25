@@ -4,15 +4,15 @@
 
 deedup finds the duplicates other tools miss on your Unraid server: identical files with different names, photos that differ only in their metadata, re-compressed copies, and the contents of Google Takeout zips you've already got on disk. It indexes your terabytes incrementally, one disk at a time, and shows you everything before touching a single file.
 
-## Status: milestone 2
+## Status: milestone 3
 
-deedup finds **exact duplicates of any file type** and **photos that differ only in their metadata**, and reports them. It is **report-only**: the container mounts `/mnt` read-only and never changes your files.
+deedup finds **exact duplicates of any file type** and **photos that differ only in their metadata**, looks **inside zip, tar and 7z archives and Google Takeout**, and reports what it finds. It is **report-only**: the container mounts `/mnt` read-only and never changes your files.
 
 | Milestone | What it adds | Status |
 |---|---|---|
 | M1 | Exact duplicates, any file type, report only | done |
-| M2 | Photos that differ only in metadata (EXIF-blind image hash), metadata, Browse | this release |
-| M3 | Zip/tar/7z members and Google Takeout coverage ("what's already on disk") | planned |
+| M2 | Photos that differ only in metadata (EXIF-blind image hash), metadata, Browse | done |
+| M3 | Zip/tar/7z members and Google Takeout coverage ("what's already on disk"), local CI | this release |
 | M4 | Similar photos (recompressed, resized, "Storage saver") with a review queue | planned |
 | M5 | Browse and plan reorganisation (preview only) | planned |
 | Gate | Write access to `/mnt` is turned on only with your OK | |
@@ -30,6 +30,7 @@ deedup finds **exact duplicates of any file type** and **photos that differ only
 - **Same photo, different metadata** (milestone 2). JPEGs are compared on their compressed image data with EXIF, XMP, IPTC, ICC, embedded thumbnails and comments skipped; PNG, HEIC/HEIF, WebP, AVIF, TIFF and BMP are compared on their decoded pixels. A date fix, a GPS tag or a photo manager's keywords no longer hide a copy. The report shows both photos side by side with the fields that differ highlighted. Recompressed or resized copies (Google "Storage saver") are milestone 4.
 - **Metadata** (milestone 2). ExifTool reads date taken, camera, resolution, duration and GPS from photos and videos, headers only.
 - **Browse** (milestone 2). Walk a share as one folder tree across its disks, as a list or as thumbnails, and filter by type, year taken, camera, missing GPS, missing date or duplicates only. Each file has a details page with its metadata, hashes and duplicate groups. Thumbnails are made on demand and cached in `/config/thumbs`.
+- **Archives and Google Takeout** (milestone 3). Zip, tar (also .tar.gz, .tgz, .tar.bz2, .tar.xz) and 7z files in your Takeout folders, or in every scanned folder if you turn that on, are read in place: nothing is extracted to disk. Each file inside is hashed like a loose file, so it joins the duplicate report, and an archive inside an archive is opened one level deep. The **Archives** screen shows, for every archive and every album in it, how much is already on your disks (byte for byte, or the same photo with other metadata), what exists only in another archive, and what is not on disk yet, with previews. The parts of a multi-part Takeout (`takeout-…-001.zip`, `-002.zip`, …) are shown as one, and Google's JSON sidecars are matched to their photos across parts, including the truncated and `(1)` names Google produces, to give each photo its date taken and GPS. Copies inside archives never count as reclaimable space, because they can't be removed on their own; tick "Include copies only inside archives" on the Duplicates screen to see them.
 - **Light and dark themes.** Follows your system setting, or pick Light or Dark in the header; the choice is remembered per browser.
 - **Checks.** Files that exist at the same path on two disks (Unraid shows only one of them in `/mnt/user`), and files that could not be read.
 
@@ -77,12 +78,20 @@ Everything else is set in the app on the Setup screen.
 ```sh
 python -m venv .venv && . .venv/bin/activate
 pip install -e '.[dev]'   # also install ExifTool, e.g. apt install libimage-exiftool-perl
-pytest -q
-ruff check .
 DEEDUP_CONFIG=./data DEEDUP_MNT=/path/to/test/mnt python -m deedup
 ```
 
-Layout: `deedup/discovery.py` (disks, shares, roots), `scanner.py` (directory walk), `hashing.py` (partial and BLAKE3 hashes), `imaging.py` (metadata-blind image hash, thumbnails), `metadata.py` (ExifTool), `engine.py` (scan pipeline and grouping), `benchmark.py`, `worker.py` (job queue and schedule), `web/` (FastAPI, Jinja and htmx UI).
+### Local CI
+
+`make ci` runs exactly what GitHub runs on every pull request, and needs only Docker:
+
+1. **Lint and tests** in the Dockerfile's `test` stage, on the same Debian and ExifTool as the image, as a non-root user like on Unraid.
+2. **Image build** (`deedup:ci`).
+3. **Smoke test**: starts the image with an empty read-only `/mnt`, loads every page and checks it runs as uid 99.
+
+`make check` is the quick version: ruff and pytest with the Python on your machine, no Docker. GitHub's workflow (`.github/workflows/ci.yml`) calls `make ci` too, then pushes the image on `main`.
+
+Layout: `deedup/discovery.py` (disks, shares, roots), `scanner.py` (directory walk), `hashing.py` (partial and BLAKE3 hashes), `imaging.py` (metadata-blind image hash, thumbnails), `metadata.py` (ExifTool), `archives.py` (reading zip, tar and 7z members, Takeout sidecars), `archive_index.py` (storing members, sidecar pairing, coverage), `engine.py` (scan pipeline and grouping), `benchmark.py`, `worker.py` (job queue and schedule), `web/` (FastAPI, Jinja and htmx UI).
 
 ## Licence
 

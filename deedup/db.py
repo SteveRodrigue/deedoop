@@ -129,6 +129,66 @@ MIGRATIONS: list[str] = [
         DELETE FROM media WHERE file_id = NEW.id;
     END;
     """,
+    # v3: milestone 3, archives and Google Takeout
+    """
+    CREATE INDEX files_container ON files(container_id) WHERE container_id != 0;
+
+    CREATE TABLE archives (
+        file_id       INTEGER PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE,
+        kind          TEXT NOT NULL,      -- zip, tar, 7z
+        takeout_set   TEXT,               -- e.g. 'disk3:Backups/takeout-20240301t101010z'; NULL if not a Takeout
+        part          INTEGER,
+        members       INTEGER NOT NULL DEFAULT 0,
+        unpacked      INTEGER NOT NULL DEFAULT 0,   -- total member bytes
+        indexed_at    REAL NOT NULL,
+        error         TEXT,
+        -- coverage, refreshed after every scan
+        media_members INTEGER NOT NULL DEFAULT 0,  -- members that are not Takeout JSON
+        cov_exact     INTEGER NOT NULL DEFAULT 0,
+        cov_image     INTEGER NOT NULL DEFAULT 0,
+        cov_archive   INTEGER NOT NULL DEFAULT 0,  -- only in another archive
+        cov_new       INTEGER NOT NULL DEFAULT 0,
+        new_bytes     INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX archives_set ON archives(takeout_set);
+
+    -- Parsed Google Photos JSON sidecars (members or loose files).
+    CREATE TABLE sidecar_json (
+        file_id      INTEGER PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE,
+        title        TEXT,
+        taken_at     TEXT,   -- UTC, 'YYYY-MM-DD HH:MM:SS'
+        lat          REAL,
+        lon          REAL,
+        description  TEXT
+    );
+
+    -- Which sidecar belongs to which photo; rebuilt after every scan.
+    CREATE TABLE sidecars (
+        file_id       INTEGER PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE,
+        json_file_id  INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE
+    );
+
+    -- An archive that changed is indexed again from scratch.
+    CREATE TRIGGER files_changed_archive AFTER UPDATE OF size, mtime_ns, inode, dev ON files
+    BEGIN
+        DELETE FROM files WHERE container_id = NEW.id;
+        DELETE FROM archives WHERE file_id = NEW.id;
+        DELETE FROM sidecar_json WHERE file_id = NEW.id;
+    END;
+
+    -- Members follow their archive: gone when it is gone, back when it is back.
+    CREATE TRIGGER files_state_members AFTER UPDATE OF state ON files
+    WHEN NEW.container_id = 0 AND NEW.state != OLD.state
+    BEGIN
+        UPDATE files SET state = NEW.state WHERE container_id = NEW.id;
+    END;
+
+    -- Deleting an archive row deletes its members (and theirs, one level down).
+    CREATE TRIGGER files_deleted_members AFTER DELETE ON files
+    BEGIN
+        DELETE FROM files WHERE container_id = OLD.id;
+    END;
+    """,
 ]
 
 DEFAULT_SETTINGS: dict[str, Any] = {
@@ -143,9 +203,11 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "@eaDir",
         ".deedup-quarantine",
     ],
-    # Folders holding Google Takeout or other archives. Recorded now, used
-    # from milestone 3.
+    # Folders holding Google Takeout or other archives. Archives in them are
+    # opened and their contents indexed.
     "takeout_paths": [],
+    # Also open archives found anywhere else in the selected shares.
+    "archives_everywhere": False,
     # Match methods. Exact content is always on.
     "image_matching": True,   # same photo, different metadata
     "metadata": True,         # read date taken, camera, size, GPS with ExifTool

@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import base64
 import datetime as dt
+import io
 import json
 import secrets
+import zipfile
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -19,6 +21,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from .. import __version__, db, queries
+from ..archives import read_member_bytes
 from ..categories import CATEGORIES
 from ..config import AppConfig
 from ..config import load as load_config
@@ -201,6 +204,7 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
         schedule_end: str = Form("07:00"),
         image_matching: str = Form(""),
         metadata: str = Form(""),
+        archives_everywhere: str = Form(""),
     ):
         if disk_mode not in ("single", "parallel"):
             return RedirectResponse("/setup?error=Unknown+disk+mode", status_code=303)
@@ -223,6 +227,7 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
                 "schedule_end": schedule_end,
                 "image_matching": bool(image_matching),
                 "metadata": bool(metadata),
+                "archives_everywhere": bool(archives_everywhere),
             })
         finally:
             c.close()
@@ -253,10 +258,10 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
 
     @app.get("/duplicates", response_class=HTMLResponse)
     def duplicates(request: Request, method: str = "exact", category: str = "", q: str = "", min_mb: float = 0,
-                   disk: str = "", group: int = 0, page: int = 1):
+                   disk: str = "", group: int = 0, archives: str = "", page: int = 1):
         method = method if method in queries.METHODS else "exact"
         flt = queries.GroupFilter(method=method, category=category, q=q, min_size=int(min_mb * 1e6), disk=disk,
-                                  group=group, page=page)
+                                  group=group, archives=bool(archives), page=page)
         c = conn()
         try:
             groups, total, wasted = queries.list_groups(c, flt)
@@ -264,9 +269,9 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
             disks = [r["disk"] for r in queries.per_disk(c)]
             pages = max(1, -(-total // flt.per_page))
             qs = _q_params(method=method if method != "exact" else "", category=category, q=q,
-                           min_mb=min_mb or "", disk=disk, group=group or "")
-            counts = {m: c.execute("SELECT COUNT(*), COALESCE(SUM(wasted), 0) FROM groups WHERE method = ?",
-                                   (m,)).fetchone() for m in queries.METHODS}
+                           min_mb=min_mb or "", disk=disk, group=group or "", archives=archives)
+            counts = {m: c.execute("SELECT COUNT(*), COALESCE(SUM(wasted), 0) FROM groups WHERE method = ? "
+                                   "AND wasted > 0", (m,)).fetchone() for m in queries.METHODS}
             return render(request, "duplicates.html", groups=groups, members=members, total=total,
                           wasted=wasted, flt=flt, pages=pages, categories=CATEGORIES, disks=disks, qs=qs,
                           min_mb=min_mb or "", methods=queries.METHODS, counts=counts,
@@ -315,24 +320,65 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
         c = conn()
         try:
             r = c.execute(
-                "SELECT f.dir, f.name, f.ext, f.size, f.mtime_ns, r.path FROM files f "
-                "JOIN roots r ON r.id = f.root_id WHERE f.id = ?", (file_id,)).fetchone()
+                f"SELECT f.dir, f.name, f.ext, f.size, f.mtime_ns, r.path, {queries.CONTAINER_COLS} FROM files f "
+                f"JOIN roots r ON r.id = f.root_id {queries.CONTAINER_JOINS} WHERE f.id = ?", (file_id,)).fetchone()
         finally:
             c.close()
         if r is None or r["ext"] not in THUMB_EXTS:
             return Response(status_code=404)
+        if not queries.can_thumb(r):
+            return Response(PLACEHOLDER_SVG, media_type="image/svg+xml", headers={"Cache-Control": "max-age=300"})
         folder = cfg.config_dir / "thumbs" / str(size) / f"{file_id % 256:02x}"
         dest = folder / f"{file_id}-{r['mtime_ns']}-{r['size']}.jpg"
         if not dest.exists():
             for old in folder.glob(f"{file_id}-*.jpg"):  # the file changed since
                 old.unlink(missing_ok=True)
-            src = str(Path(r["path"]) / r["dir"] / r["name"])
             try:
-                make_thumbnail(src, dest, size)
-            except (NotAnImage, OSError):
+                if r["container_id"]:
+                    archive = str(Path(r["path"]) / r["c1_dir"] / r["c1_name"])
+                    member = f"{r['dir']}/{r['name']}" if r["dir"] else r["name"]
+                    make_thumbnail(io.BytesIO(read_member_bytes(archive, member)), dest, size)
+                else:
+                    make_thumbnail(str(Path(r["path"]) / r["dir"] / r["name"]), dest, size)
+            except (NotAnImage, OSError, KeyError, zipfile.BadZipFile):
                 return Response(PLACEHOLDER_SVG, media_type="image/svg+xml",
                                 headers={"Cache-Control": "max-age=300"})
         return FileResponse(dest, media_type="image/jpeg", headers={"Cache-Control": "max-age=86400"})
+
+    @app.get("/archives", response_class=HTMLResponse)
+    def archives_page(request: Request):
+        c = conn()
+        try:
+            return render(request, "archives.html", archives=queries.archive_list(c), settings=db.get_settings(c))
+        finally:
+            c.close()
+
+    @app.get("/archives/{file_id}", response_class=HTMLResponse)
+    def archive_page(request: Request, file_id: int, status: str = "new", album: str = "", page: int = 1):
+        c = conn()
+        try:
+            parts = queries.archive_parts(c, file_id)
+            if not parts:
+                return Response("No such archive in the index", status_code=404)
+            members = queries.archive_members(c, parts)
+        finally:
+            c.close()
+        status = status if status in queries.STATUSES or status == "all" else "new"
+        shown = [m for m in members if (status == "all" or m["status"] == status
+                                        or (status == "new" and m["status"] == "unreadable"))
+                 and (not album or queries.album_of(m["dir"]) == album)]
+        per_page = 120
+        pages = max(1, -(-len(shown) // per_page))
+        page = min(max(page, 1), pages)
+        counts = {k: sum(1 for m in members if m["status"] == k) for k in queries.STATUSES}
+        first = parts[0]
+        label = queries._set_label(first) if first["takeout_set"] else first["name"]
+        return render(request, "archive.html", parts=parts, label=label, albums=queries.albums(members),
+                      shown=shown[(page - 1) * per_page:page * per_page], total_shown=len(shown), status=status,
+                      album=album, counts=counts, statuses=queries.STATUSES, page=page, pages=pages,
+                      file_id=file_id, total=len(members),
+                      new_bytes=sum(m["size"] for m in members if m["status"] in ("new", "unreadable")),
+                      qs=_q_params(status=status if status != "new" else "", album=album))
 
     @app.get("/same-path", response_class=HTMLResponse)
     def same_path(request: Request):
@@ -344,8 +390,10 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
             c.close()
 
     @app.get("/export/duplicates.{fmt}")
-    def export(fmt: str, method: str = "exact", category: str = "", q: str = "", min_mb: float = 0, disk: str = ""):
-        flt = queries.GroupFilter(method=method, category=category, q=q, min_size=int(min_mb * 1e6), disk=disk)
+    def export(fmt: str, method: str = "exact", category: str = "", q: str = "", min_mb: float = 0, disk: str = "",
+               archives: str = ""):
+        flt = queries.GroupFilter(method=method, category=category, q=q, min_size=int(min_mb * 1e6), disk=disk,
+                                  archives=bool(archives))
         if fmt not in ("csv", "json"):
             return Response(status_code=404)
         c = conn()

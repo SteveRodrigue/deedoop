@@ -5,7 +5,7 @@
 <section class="card callout">
   <h2>Welcome to deedup</h2>
   <p>Pick the shares to scan on the <a href="/setup">Setup</a> screen, then start a scan here. deedup only reads your
-  files: milestone 1 reports duplicates and never changes anything.</p>
+  files: it reports duplicates and never changes anything.</p>
 </section>
 {% endif %}
 
@@ -23,6 +23,8 @@
     <div class="muted small">groups, {{ stats.image_wasted | bytes }}</div></div>
   <div class="tile"><div class="label">Indexed</div><div class="value">{{ "{:,}".format(stats.files) }}</div>
     <div class="muted small">files, {{ stats.bytes | bytes }}; {{ "{:,}".format(stats.media) }} with metadata</div></div>
+  {% if stats.archives %}<div class="tile"><a href="/archives" class="label">Archives</a><div class="value">{{ "{:,}".format(stats.archives) }}</div>
+    <div class="muted small">{{ "{:,}".format(stats.archive_members) }} files inside, {{ "{:,}".format(stats.archive_new) }} not on disk yet</div></div>{% endif %}
   <div class="tile"><div class="label">Index size</div><div class="value">{{ stats.index_bytes | bytes }}</div>
     <div class="muted small">{{ "{:,}".format(stats.full_hashed) }} files fully hashed</div></div>
 </section>

@@ -140,6 +140,17 @@ details.group .path { flex: 1; }
 .folders { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
 .folders a { border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; }
 .mono { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+/* Archive coverage: a stacked bar of member statuses. */
+.cov { display: flex; height: 10px; min-width: 120px; border-radius: 5px; overflow: hidden; background: var(--line); }
+.cov span { display: block; height: 100%; }
+.c-exact { background: var(--ok); }
+.c-image { background: var(--accent); }
+.c-archive { background: var(--bar); }
+.c-new { background: var(--warn); }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+.status-tabs a { white-space: nowrap; }
+
 @media (max-width: 640px) {
   .theme { margin-left: 0; }
   .photos { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
@@ -153,4 +164,6 @@ details.group .path { flex: 1; }
   details.group summary .path { flex: 1 1 100%; max-width: none; }
   .members td.path { white-space: normal; word-break: break-all; max-width: none; }
   .members .col-mtime { display: none; }
+  .cov { min-width: 48px; }
+  .hide-phone { display: none; }
 }
