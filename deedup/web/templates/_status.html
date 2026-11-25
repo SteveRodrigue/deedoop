@@ -1,7 +1,7 @@
 {# Live scan status. Polled by htmx every 2 s while a job is active. #}
 <div id="status" {% if active %}hx-get="/partials/status" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>
 {% if active %}
-  {% set phase_names = {"starting": "Starting", "walk": "Walking folders", "archives": "Opening archives", "sidecars": "Reading Takeout JSON", "hash_image": "Reading photos", "metadata": "Reading metadata", "hash_partial": "Quick hashing same-size files",
+  {% set phase_names = {"starting": "Starting", "walk": "Walking folders", "archives": "Opening archives", "sidecars": "Reading Takeout JSON", "hash_image": "Reading photos", "hash_similar": "Fingerprinting photos", "similar": "Finding similar photos", "metadata": "Reading metadata", "hash_partial": "Quick hashing same-size files",
                         "hash_full": "Full hashing likely duplicates", "group": "Building duplicate groups", "done": "Finishing"} %}
   <div class="row between">
     <div>

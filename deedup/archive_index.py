@@ -14,6 +14,10 @@ from .hashing import Expected, FileChanged, _open
 from .metadata import METADATA_EXTS
 from .scanner import ext_of
 
+# Version 2 (milestone 4) adds perceptual hashes for photos inside archives;
+# archives indexed by an older version are read once more.
+ARCHIVE_VERSION = 2
+
 
 def in_scope(paths: list[str], *candidates: str) -> bool:
     for p in paths:
@@ -31,9 +35,9 @@ def archive_candidates(conn: sqlite3.Connection, settings: dict) -> list[sqlite3
             FROM files f JOIN roots r ON r.id = f.root_id
             WHERE f.state = 'present' AND r.enabled = 1 AND f.container_id = 0
               AND f.ext IN ({",".join("?" * len(exts))})
-              AND NOT EXISTS (SELECT 1 FROM archives a WHERE a.file_id = f.id)
+              AND NOT EXISTS (SELECT 1 FROM archives a WHERE a.file_id = f.id AND a.version >= ?)
             ORDER BY r.disk, r.path, f.dir, f.name""",
-        exts,
+        [*exts, ARCHIVE_VERSION if settings.get("similar_matching") else 1],
     ).fetchall()
     paths = settings["takeout_paths"]
     out = []
@@ -134,10 +138,10 @@ def store_archive(conn: sqlite3.Connection, row: sqlite3.Row, members: list[Memb
         conn.execute("DELETE FROM files WHERE container_id = ?", (row["id"],))  # a retry after a crash
         _insert_members(conn, row, row["id"], members, run_id)
         conn.execute(
-            "INSERT OR REPLACE INTO archives(file_id, kind, takeout_set, part, members, unpacked, indexed_at, error) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO archives(file_id, kind, takeout_set, part, members, unpacked, indexed_at, error, "
+            "version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (row["id"], kind, takeout_set, tp[1] if tp else None, _count(members),
-             sum(m.size for m in members), now, error),
+             sum(m.size for m in members), now, error, ARCHIVE_VERSION),
         )
 
 
@@ -240,27 +244,41 @@ _OTHER_ARCHIVE_HAS = """EXISTS (SELECT 1 FROM hashes h3 JOIN files f3 ON f3.id =
                             (SELECT p.container_id FROM files p WHERE p.id = f3.container_id AND p.container_id != 0),
                             f3.container_id) != {top})"""
 
+# A loose photo that looks the same (within the similar threshold) and that
+# nobody marked as a different photo.
+_LOOSE_SIMILAR = """EXISTS (SELECT 1 FROM similar_pairs sp JOIN files f4 ON f4.id = (CASE WHEN sp.a = m.id THEN sp.b ELSE sp.a END)
+                    JOIN roots r4 ON r4.id = f4.root_id
+                    WHERE (sp.a = m.id OR sp.b = m.id) AND sp.pdist <= {threshold}
+                      AND f4.container_id = 0 AND f4.state = 'present' AND r4.enabled = 1
+                      AND NOT EXISTS (SELECT 1 FROM reviews rv JOIN hashes x ON x.file_id = m.id AND x.kind = 'img_exact'
+                                      JOIN hashes y ON y.file_id = f4.id AND y.kind = 'img_exact'
+                                      WHERE rv.decision = 'not_dup'
+                                        AND rv.key_a = MIN(x.value, y.value) AND rv.key_b = MAX(x.value, y.value)))"""
+
 MEMBER_STATUS = f"""
     CASE
       WHEN m.error IS NOT NULL OR hb.value IS NULL THEN 'unreadable'
       WHEN {_LOOSE_HAS.format(kind='blake3', val='hb.value')} THEN 'exact'
       WHEN hi.value IS NOT NULL AND {_LOOSE_HAS.format(kind='img_exact', val='hi.value')} THEN 'image'
+      WHEN hi.value IS NOT NULL AND {{similar}} THEN 'similar'
       WHEN {_OTHER_ARCHIVE_HAS} THEN 'archive'
       ELSE 'new'
     END
 """
 
 
-def member_status_sql(top_expr: str) -> str:
-    return MEMBER_STATUS.replace("{top}", top_expr)
+def member_status_sql(top_expr: str, threshold: int | None = None) -> str:
+    """SQL for a member's status. ``threshold`` None leaves similar photos out."""
+    similar = "0" if threshold is None else _LOOSE_SIMILAR.replace("{threshold}", str(int(threshold)))
+    return MEMBER_STATUS.replace("{similar}", similar).replace("{top}", top_expr)
 
 
-def refresh_coverage(conn: sqlite3.Connection) -> None:
+def refresh_coverage(conn: sqlite3.Connection, threshold: int | None = None) -> None:
     """For every archive: how many members are already on disk (exact or same
     photo), only in another archive, or new. Takeout JSON sidecars and
     folders' metadata.json are counted apart."""
     archives = [r[0] for r in conn.execute("SELECT file_id FROM archives")]
-    status_sql = member_status_sql(":top")
+    status_sql = member_status_sql(":top", threshold)
     with db.Tx(conn):
         for aid in archives:
             counts = defaultdict(int)
@@ -282,8 +300,8 @@ def refresh_coverage(conn: sqlite3.Connection) -> None:
                 if r["status"] == "new":
                     new_bytes += r["size"]
             conn.execute(
-                "UPDATE archives SET media_members = ?, cov_exact = ?, cov_image = ?, cov_archive = ?, cov_new = ?, "
-                "new_bytes = ? WHERE file_id = ?",
-                (sum(counts.values()), counts["exact"], counts["image"], counts["archive"],
+                "UPDATE archives SET media_members = ?, cov_exact = ?, cov_image = ?, cov_similar = ?, cov_archive = ?, "
+                "cov_new = ?, new_bytes = ? WHERE file_id = ?",
+                (sum(counts.values()), counts["exact"], counts["image"], counts["similar"], counts["archive"],
                  counts["new"] + counts["unreadable"], new_bytes, aid),
             )

@@ -20,7 +20,8 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from .. import __version__, db, queries
+from .. import __version__, db, queries, similar
+from ..archive_index import refresh_coverage
 from ..archives import read_member_bytes
 from ..categories import CATEGORIES
 from ..config import AppConfig
@@ -205,6 +206,8 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
         image_matching: str = Form(""),
         metadata: str = Form(""),
         archives_everywhere: str = Form(""),
+        similar_matching: str = Form(""),
+        similar_threshold: int = Form(similar.DEFAULT_THRESHOLD),
     ):
         if disk_mode not in ("single", "parallel"):
             return RedirectResponse("/setup?error=Unknown+disk+mode", status_code=303)
@@ -228,6 +231,8 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
                 "image_matching": bool(image_matching),
                 "metadata": bool(metadata),
                 "archives_everywhere": bool(archives_everywhere),
+                "similar_matching": bool(similar_matching),
+                "similar_threshold": max(0, min(similar_threshold, similar.MAX_DISTANCE)),
             })
         finally:
             c.close()
@@ -310,7 +315,9 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
             f = queries.file_detail(c, file_id)
             if f is None:
                 return Response("No such file in the index", status_code=404)
-            return render(request, "file.html", f=f)
+            s = db.get_settings(c)
+            return render(request, "file.html", f=f,
+                          similar=queries.similar_for_file(c, file_id, threshold_of(s)) if s["similar_matching"] else [])
         finally:
             c.close()
 
@@ -345,6 +352,54 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
                                 headers={"Cache-Control": "max-age=300"})
         return FileResponse(dest, media_type="image/jpeg", headers={"Cache-Control": "max-age=86400"})
 
+    @app.get("/review", response_class=HTMLResponse)
+    def review(request: Request, view: str = "queue", done: str = ""):
+        c = conn()
+        try:
+            s = db.get_settings(c)
+            t = threshold_of(s)
+            decided = view == "decided"
+            pairs = [p for p in (queries.pair_view(c, r) for r in similar.queue(c, t, decided=decided,
+                                                                                  limit=100 if decided else 2)) if p]
+            return render(request, "review.html", pairs=pairs, view="decided" if decided else "queue",
+                          counts=similar.counts(c, t), threshold=t, settings=s, decisions=similar.DECISIONS,
+                          done=done, max_distance=similar.MAX_DISTANCE)
+        finally:
+            c.close()
+
+    @app.post("/review/decide")
+    def review_decide(a: int = Form(...), b: int = Form(...), decision: str = Form(...)):
+        c = conn()
+        try:
+            ok = similar.decide(c, a, b, decision)
+            if ok and decision != "later":
+                similar.rebuild_similar_groups(c, threshold_of(db.get_settings(c)))
+        finally:
+            c.close()
+        return RedirectResponse(f"/review?done={_q(decision) if ok else ''}", status_code=303)
+
+    @app.post("/review/undo")
+    def review_undo(a: int = Form(...), b: int = Form(...)):
+        c = conn()
+        try:
+            similar.undo(c, a, b)
+            similar.rebuild_similar_groups(c, threshold_of(db.get_settings(c)))
+        finally:
+            c.close()
+        return RedirectResponse("/review?view=decided", status_code=303)
+
+    @app.post("/review/threshold")
+    def review_threshold(threshold: int = Form(...), view: str = Form("queue")):
+        c = conn()
+        try:
+            t = max(0, min(threshold, similar.MAX_DISTANCE))
+            db.set_settings(c, {"similar_threshold": t})
+            similar.rebuild_similar_groups(c, t)
+            refresh_coverage(c, t)
+        finally:
+            c.close()
+        return RedirectResponse(f"/review?view={'decided' if view == 'decided' else 'queue'}", status_code=303)
+
     @app.get("/archives", response_class=HTMLResponse)
     def archives_page(request: Request):
         c = conn()
@@ -360,7 +415,8 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
             parts = queries.archive_parts(c, file_id)
             if not parts:
                 return Response("No such archive in the index", status_code=404)
-            members = queries.archive_members(c, parts)
+            s = db.get_settings(c)
+            members = queries.archive_members(c, parts, threshold_of(s) if s["similar_matching"] else None)
         finally:
             c.close()
         status = status if status in queries.STATUSES or status == "all" else "new"
@@ -467,6 +523,13 @@ PLACEHOLDER_SVG = (
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 30"><rect width="40" height="30" fill="#8884"/>'
     '<path d="M8 22l8-9 6 6 4-4 6 7z" fill="#8888"/></svg>'
 )
+
+
+def threshold_of(settings: dict) -> int:
+    try:
+        return max(0, min(int(settings["similar_threshold"]), similar.MAX_DISTANCE))
+    except (TypeError, ValueError):
+        return similar.DEFAULT_THRESHOLD
 
 
 def _q(s: str) -> str:

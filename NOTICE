@@ -13,6 +13,10 @@ Ideas borrowed, with thanks (no code copied):
     the rules for matching Google Takeout JSON sidecars to their photos
     (re-implemented from the documented behaviour; no code copied).
 
+  - ImageHash (https://github.com/JohannesBuchner/imagehash), BSD 2-Clause
+    licence: the pHash and dHash algorithms (re-implemented with NumPy; no
+    code copied).
+
 Bundled third-party software:
   - htmx 2.0.4 (https://htmx.org), Zero-Clause BSD licence,
     in deedup/web/static/htmx.min.js.

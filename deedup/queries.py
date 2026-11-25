@@ -28,6 +28,10 @@ def index_stats(conn: sqlite3.Connection, db_path: Path) -> dict:
     gi = conn.execute(
         "SELECT COUNT(*) AS groups, COALESCE(SUM(wasted), 0) AS wasted FROM groups WHERE method = 'image' AND wasted > 0"
     ).fetchone()
+    gs = conn.execute(
+        "SELECT COUNT(*) AS groups, COALESCE(SUM(wasted), 0) AS wasted, COALESCE(SUM(pending), 0) AS pending "
+        "FROM groups WHERE method = 'similar'"
+    ).fetchone()
     total = conn.execute(f"WITH eff AS ({EFFECTIVE_GROUPS}) SELECT COALESCE(SUM(wasted), 0) FROM eff").fetchone()[0]
     media = conn.execute("SELECT COUNT(*), COUNT(taken_at) FROM media").fetchone()
     hashed = conn.execute("SELECT COUNT(*) FROM hashes WHERE kind = 'blake3'").fetchone()[0]
@@ -48,6 +52,7 @@ def index_stats(conn: sqlite3.Connection, db_path: Path) -> dict:
         "errors": errors, "index_bytes": size,
         "image_groups": gi["groups"], "image_wasted": gi["wasted"], "total_wasted": total,
         "media": media[0], "media_dated": media[1],
+        "similar_groups": gs["groups"], "similar_wasted": gs["wasted"], "similar_pending": gs["pending"],
         "archives": arch[0], "archive_members": arch[1], "archive_new": arch[2],
     }
 
@@ -89,7 +94,7 @@ def root_counts(conn: sqlite3.Connection) -> dict[int, int]:
     }
 
 
-METHODS = {"exact": "Exact copies", "image": "Same photo, different metadata"}
+METHODS = {"exact": "Exact copies", "image": "Same photo, different metadata", "similar": "Similar photos"}
 
 # Archive members are shown as "archive path › member path". Members are
 # nested one level at most, so two joins reach the top-level archive.
@@ -202,6 +207,7 @@ def group_members(conn: sqlite3.Connection, group_ids: list[int]) -> dict[int, l
         rel = rel_path(r)
         member = bool(r["container_id"])
         out[r["group_id"]].append({
+            "width": r["width"], "height": r["height"],
             "file_id": r["id"],
             "disk": r["disk"],
             "path": f"{r['root_path']}/{rel}",
@@ -229,6 +235,11 @@ def group_members(conn: sqlite3.Connection, group_ids: list[int]) -> dict[int, l
         diff = {k for k in DIFF_FIELDS if len({m[k] for m in members}) > 1}
         for m in members:
             m["differs"] = diff
+            m["keeper"] = False
+        if members:
+            from .similar import keeper_rank
+
+            max(members, key=keeper_rank)["keeper"] = True
     return out
 
 
@@ -473,7 +484,7 @@ def file_detail(conn: sqlite3.Connection, file_id: int) -> dict | None:
     v = _file_view(r)
     v.update({"inode": r["inode"], "nlink": r["nlink"], "error": r["error"], "mime": r["mime"],
               "orientation": r["orientation"], "gps_lat": r["gps_lat"], "gps_lon": r["gps_lon"]})
-    v["hashes"] = {h["kind"]: (h["value"].hex() if h["kind"] != "img_none" else h["value"].decode(errors="replace"))
+    v["hashes"] = {h["kind"]: (h["value"].hex() if h["kind"] not in ("img_none", "sim_none", "json_none") else h["value"].decode(errors="replace"))
                    for h in conn.execute("SELECT kind, value FROM hashes WHERE file_id = ?", (file_id,))}
     v["groups"] = [dict(g) for g in conn.execute(
         "SELECT g.id, g.method, g.copies, g.wasted FROM group_members m JOIN groups g ON g.id = m.group_id "
@@ -496,7 +507,8 @@ def file_detail(conn: sqlite3.Connection, file_id: int) -> dict | None:
 
 # -- archives -------------------------------------------------------------------
 
-STATUSES = {"exact": "Already on disk", "image": "Same photo on disk", "archive": "Only in another archive",
+STATUSES = {"exact": "Already on disk", "image": "Same photo on disk", "similar": "Similar photo on disk",
+            "archive": "Only in another archive",
             "new": "Not on disk yet", "unreadable": "Could not be read"}
 
 
@@ -524,19 +536,19 @@ def archive_list(conn: sqlite3.Connection) -> list[dict]:
                 "id": r["file_id"], "label": _set_label(r) if r["takeout_set"] else r["name"],
                 "takeout": bool(r["takeout_set"]), "kind": r["kind"], "folder": r["user_path"] + ("/" + r["dir"] if r["dir"] else ""),
                 "disks": [], "parts": 0, "size": 0, "members": 0, "exact": 0, "image": 0, "archive": 0,
-                "new": 0, "new_bytes": 0, "errors": 0, "indexed": True,
+                "similar": 0, "new": 0, "new_bytes": 0, "errors": 0, "indexed": True,
             }
         e["parts"] += 1
         e["size"] += r["size"]
         if r["disk"] not in e["disks"]:
             e["disks"].append(r["disk"])
-        for k_out, k_in in (("members", "media_members"), ("exact", "cov_exact"), ("image", "cov_image"),
+        for k_out, k_in in (("members", "media_members"), ("exact", "cov_exact"), ("image", "cov_image"), ("similar", "cov_similar"),
                             ("archive", "cov_archive"), ("new", "cov_new"), ("new_bytes", "new_bytes")):
             e[k_out] += r[k_in] or 0
         e["errors"] += 1 if r["error"] else 0
         e["indexed"] = e["indexed"] and r["indexed_at"] is not None
     for e in out.values():
-        e["covered"] = (e["exact"] + e["image"]) / e["members"] if e["members"] else 0.0
+        e["covered"] = (e["exact"] + e["image"] + e["similar"]) / e["members"] if e["members"] else 0.0
     return sorted(out.values(), key=lambda e: (-e["new_bytes"], e["label"].lower()))
 
 
@@ -553,12 +565,12 @@ def archive_parts(conn: sqlite3.Connection, file_id: int) -> list[sqlite3.Row]:
     ).fetchall()
 
 
-def archive_members(conn: sqlite3.Connection, parts: list[sqlite3.Row]) -> list[dict]:
+def archive_members(conn: sqlite3.Connection, parts: list[sqlite3.Row], threshold: int | None = None) -> list[dict]:
     """Every member of the given archives with its status, skipping Takeout
     JSON sidecars and nested archives (their own members are listed)."""
     from .archive_index import member_status_sql
 
-    sql = member_status_sql(":top")
+    sql = member_status_sql(":top", threshold)
     out = []
     for p in parts:
         for r in conn.execute(
@@ -609,5 +621,74 @@ def albums(members: list[dict]) -> list[dict]:
         if m["status"] in ("new", "unreadable"):
             e["new_bytes"] += m["size"]
     for e in out.values():
-        e["covered"] = (e["exact"] + e["image"]) / e["members"] if e["members"] else 0.0
+        e["covered"] = (e["exact"] + e["image"] + e["similar"]) / e["members"] if e["members"] else 0.0
     return sorted(out.values(), key=lambda e: (e["covered"], e["name"].lower()))
+
+
+# -- similar photos: review --------------------------------------------------------
+
+
+def _photo(conn: sqlite3.Connection, file_id: int) -> dict | None:
+    r = conn.execute(
+        f"SELECT {FILE_COLUMNS}, f.nlink, sj.taken_at AS json_taken "
+        f"FROM files f JOIN roots r ON r.id = f.root_id LEFT JOIN media md ON md.file_id = f.id {CONTAINER_JOINS} "
+        "LEFT JOIN sidecars sc ON sc.file_id = f.id LEFT JOIN sidecar_json sj ON sj.file_id = sc.json_file_id "
+        "WHERE f.id = ?",
+        (file_id,),
+    ).fetchone()
+    if r is None:
+        return None
+    v = _file_view(r)
+    v["taken_at"] = v["taken_at"] or r["json_taken"]
+    v["width"], v["height"] = r["width"], r["height"]
+    v["pixels"] = (r["width"] or 0) * (r["height"] or 0)
+    v["folder"] = v["user_path"].rsplit("/", 1)[0]
+    return v
+
+
+def _aspect(p: dict) -> float | None:
+    if not (p["width"] and p["height"]):
+        return None
+    w, h = sorted((p["width"], p["height"]))
+    return h / w
+
+
+def pair_view(conn: sqlite3.Connection, pair: sqlite3.Row) -> dict | None:
+    """Both photos of a similar pair, the hints that support the match, the
+    fields that differ and the suggested keeper."""
+    from .similar import keeper_rank
+
+    a, b = _photo(conn, pair["a"]), _photo(conn, pair["b"])
+    if a is None or b is None:
+        return None
+    hints = []
+    if a["taken_at"] and a["taken_at"] == b["taken_at"]:
+        hints.append("same date taken")
+    ra, rb = _aspect(a), _aspect(b)
+    if ra and rb and abs(ra - rb) / max(ra, rb) < 0.01:
+        hints.append("same shape")
+    if a["name"].rsplit(".", 1)[0].lower() == b["name"].rsplit(".", 1)[0].lower():
+        hints.append("same name")
+    differs = {k for k in ("size", "dims", "taken_at", "camera", "gps", "name", "folder") if a[k] != b[k]}
+    keeper = "a" if keeper_rank(a) >= keeper_rank(b) else "b"
+    kept = None
+    if pair["decision"] in ("keep_a", "keep_b") and pair["keep"] is not None:
+        kept = a["name"] if pair["keep"] == pair["ka"] else b["name"]
+    return {"kept": kept, "a": a, "b": b, "pdist": pair["pdist"], "ddist": pair["ddist"], "hints": hints, "differs": differs,
+            "keeper": keeper, "decision": pair["decision"], "decided_at": pair["decided_at"],
+            "strength": "close" if pair["pdist"] <= 4 else "likely" if pair["pdist"] <= 8 else "loose"}
+
+
+def similar_for_file(conn: sqlite3.Connection, file_id: int, threshold: int) -> list[dict]:
+    rows = conn.execute(
+        """SELECT CASE WHEN a = ? THEN b ELSE a END AS other, pdist FROM similar_pairs
+           WHERE (a = ? OR b = ?) AND pdist <= ? ORDER BY pdist LIMIT 50""",
+        (file_id, file_id, file_id, threshold),
+    ).fetchall()
+    out = []
+    for r in rows:
+        p = _photo(conn, r["other"])
+        if p:
+            p["pdist"] = r["pdist"]
+            out.append(p)
+    return out
