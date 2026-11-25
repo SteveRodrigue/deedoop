@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "deedup"
-version = "0.1.0"
+version = "0.2.0"
 description = "Duplicate finder for Unraid and other big file hoards: dedupe your hoard, safely."
 readme = "README.md"
 license = "Apache-2.0"
@@ -17,6 +17,9 @@ dependencies = [
   "python-multipart>=0.0.9",
   "blake3>=1.0",
   "xxhash>=3.4",
+  "pillow>=11",
+  "pillow-heif>=0.20",
+  "pyexiftool>=0.5.6",
 ]
 
 [project.optional-dependencies]

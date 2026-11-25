@@ -4,21 +4,21 @@
 
 deedup finds the duplicates other tools miss on your Unraid server: identical files with different names, photos that differ only in their metadata, re-compressed copies, and the contents of Google Takeout zips you've already got on disk. It indexes your terabytes incrementally, one disk at a time, and shows you everything before touching a single file.
 
-## Status: milestone 1
+## Status: milestone 2
 
-Milestone 1 finds **exact duplicates of any file type**, whatever their names and wherever they are, and reports them. It is **report-only**: the container mounts `/mnt` read-only and never changes your files.
+deedup finds **exact duplicates of any file type** and **photos that differ only in their metadata**, and reports them. It is **report-only**: the container mounts `/mnt` read-only and never changes your files.
 
 | Milestone | What it adds | Status |
 |---|---|---|
-| M1 | Exact duplicates, any file type, report only | this release |
-| M2 | Photos that differ only in metadata (EXIF-blind image hash), metadata, Browse | planned |
+| M1 | Exact duplicates, any file type, report only | done |
+| M2 | Photos that differ only in metadata (EXIF-blind image hash), metadata, Browse | this release |
 | M3 | Zip/tar/7z members and Google Takeout coverage ("what's already on disk") | planned |
 | M4 | Similar photos (recompressed, resized, "Storage saver") with a review queue | planned |
 | M5 | Browse and plan reorganisation (preview only) | planned |
 | Gate | Write access to `/mnt` is turned on only with your OK | |
 | M6 | Move and delete: quarantine with undo, opt-in direct delete, hardlinks | planned |
 
-## What milestone 1 does
+## What it does
 
 - **Setup screen.** Lists your Unraid shares, disks and pools. Tick the shares to scan, add other folders (for example on an unassigned device), set exclusions, the disk mode and a nightly schedule.
 - **Reads the disks, not `/mnt/user`.** A share is scanned as its folder on each disk (`/mnt/disk1/Photos`, `/mnt/disk2/Photos`, …), so every file knows its disk, and the report still shows the `/mnt/user/...` path you know.
@@ -27,6 +27,10 @@ Milestone 1 finds **exact duplicates of any file type**, whatever their names an
 - **Incremental index.** A SQLite index in `/config` remembers size, mtime and inode. A rescan walks folders and rereads only new or changed files. Stopped scans pick up where they left off.
 - **Honest numbers.** Hardlinks are recognised as one copy and never counted as wasted space. Empty files are ignored.
 - **Report.** Duplicate groups sorted by reclaimable space, filters by type, disk, path and size, and CSV or JSON export.
+- **Same photo, different metadata** (milestone 2). JPEGs are compared on their compressed image data with EXIF, XMP, IPTC, ICC, embedded thumbnails and comments skipped; PNG, HEIC/HEIF, WebP, AVIF, TIFF and BMP are compared on their decoded pixels. A date fix, a GPS tag or a photo manager's keywords no longer hide a copy. The report shows both photos side by side with the fields that differ highlighted. Recompressed or resized copies (Google "Storage saver") are milestone 4.
+- **Metadata** (milestone 2). ExifTool reads date taken, camera, resolution, duration and GPS from photos and videos, headers only.
+- **Browse** (milestone 2). Walk a share as one folder tree across its disks, as a list or as thumbnails, and filter by type, year taken, camera, missing GPS, missing date or duplicates only. Each file has a details page with its metadata, hashes and duplicate groups. Thumbnails are made on demand and cached in `/config/thumbs`.
+- **Light and dark themes.** Follows your system setting, or pick Light or Dark in the header; the choice is remembered per browser.
 - **Checks.** Files that exist at the same path on two disks (Unraid shows only one of them in `/mnt/user`), and files that could not be read.
 
 ## Install on Unraid
@@ -72,13 +76,13 @@ Everything else is set in the app on the Setup screen.
 
 ```sh
 python -m venv .venv && . .venv/bin/activate
-pip install -e '.[dev]'
+pip install -e '.[dev]'   # also install ExifTool, e.g. apt install libimage-exiftool-perl
 pytest -q
 ruff check .
 DEEDUP_CONFIG=./data DEEDUP_MNT=/path/to/test/mnt python -m deedup
 ```
 
-Layout: `deedup/discovery.py` (disks, shares, roots), `scanner.py` (directory walk), `hashing.py` (partial and BLAKE3 hashes), `engine.py` (scan pipeline and grouping), `benchmark.py`, `worker.py` (job queue and schedule), `web/` (FastAPI, Jinja and htmx UI).
+Layout: `deedup/discovery.py` (disks, shares, roots), `scanner.py` (directory walk), `hashing.py` (partial and BLAKE3 hashes), `imaging.py` (metadata-blind image hash, thumbnails), `metadata.py` (ExifTool), `engine.py` (scan pipeline and grouping), `benchmark.py`, `worker.py` (job queue and schedule), `web/` (FastAPI, Jinja and htmx UI).
 
 ## Licence
 

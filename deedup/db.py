@@ -53,7 +53,7 @@ MIGRATIONS: list[str] = [
 
     CREATE TABLE hashes (
         file_id  INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
-        kind     TEXT NOT NULL,            -- partial, blake3 (later: img_exact, phash, dhash)
+        kind     TEXT NOT NULL,            -- partial, blake3, img_exact (later: phash, dhash)
         value    BLOB NOT NULL,
         PRIMARY KEY (file_id, kind)
     ) WITHOUT ROWID;
@@ -61,7 +61,7 @@ MIGRATIONS: list[str] = [
 
     CREATE TABLE groups (
         id          INTEGER PRIMARY KEY,
-        method      TEXT NOT NULL,          -- 'exact' (later: 'image', 'fuzzy')
+        method      TEXT NOT NULL,          -- 'exact', 'image' (later: 'fuzzy')
         key         TEXT NOT NULL,
         size        INTEGER NOT NULL,       -- size of one copy
         file_count  INTEGER NOT NULL,       -- paths in the group
@@ -105,6 +105,30 @@ MIGRATIONS: list[str] = [
         result      TEXT NOT NULL
     );
     """,
+    # v2: milestone 2, photos and metadata
+    """
+    CREATE TABLE media (
+        file_id      INTEGER PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE,
+        mime         TEXT,
+        taken_at     TEXT,     -- 'YYYY-MM-DD HH:MM:SS' as recorded by the camera
+        camera       TEXT,
+        width        INTEGER,
+        height       INTEGER,
+        duration     REAL,     -- seconds, for video and audio
+        gps_lat      REAL,
+        gps_lon      REAL,
+        orientation  INTEGER,
+        extracted_at REAL NOT NULL,
+        error        TEXT
+    );
+    CREATE INDEX media_taken ON media(taken_at);
+
+    -- A file whose content changed loses its metadata, like its hashes.
+    CREATE TRIGGER files_changed_media AFTER UPDATE OF size, mtime_ns, inode, dev ON files
+    BEGIN
+        DELETE FROM media WHERE file_id = NEW.id;
+    END;
+    """,
 ]
 
 DEFAULT_SETTINGS: dict[str, Any] = {
@@ -122,6 +146,9 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     # Folders holding Google Takeout or other archives. Recorded now, used
     # from milestone 3.
     "takeout_paths": [],
+    # Match methods. Exact content is always on.
+    "image_matching": True,   # same photo, different metadata
+    "metadata": True,         # read date taken, camera, size, GPS with ExifTool
     # Files smaller than this are ignored by the duplicate finder.
     "min_size": 1,
     # 'single': one disk at a time. 'parallel': up to parallel_disks at once.

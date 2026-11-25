@@ -8,7 +8,7 @@
   <Privileged>false</Privileged>
   <Support>https://github.com/SteveRodrigue/deedup/issues</Support>
   <Project>https://github.com/SteveRodrigue/deedup</Project>
-  <Overview>deedup: dedupe your hoard, safely. Finds duplicate files across your Unraid disks by content, whatever their names. Milestone 1 is report-only: /mnt is mounted read-only.</Overview>
+  <Overview>deedup: dedupe your hoard, safely. Finds duplicate files across your Unraid disks by content, whatever their names, and photos that differ only in their metadata. Report-only for now: /mnt is mounted read-only.</Overview>
   <Category>Tools: Backup:</Category>
   <WebUI>http://[IP]:[PORT:8080]/</WebUI>
   <Icon>https://raw.githubusercontent.com/SteveRodrigue/deedup/main/deedup/web/static/icon.svg</Icon>

@@ -15,12 +15,14 @@
 </section>
 
 <section class="tiles">
-  <div class="tile"><div class="label">Reclaimable space</div><div class="value">{{ stats.wasted | bytes }}</div>
-    <div class="muted small">exact duplicates, hardlinks counted once</div></div>
-  <div class="tile"><div class="label">Duplicate groups</div><div class="value">{{ "{:,}".format(stats.groups) }}</div>
-    <div class="muted small">{{ "{:,}".format(stats.dup_files) }} files</div></div>
+  <div class="tile"><div class="label">Reclaimable space</div><div class="value">{{ stats.total_wasted | bytes }}</div>
+    <div class="muted small">all methods, each copy counted once</div></div>
+  <div class="tile"><a href="/duplicates" class="label">Exact copies</a><div class="value">{{ "{:,}".format(stats.groups) }}</div>
+    <div class="muted small">groups, {{ stats.wasted | bytes }}</div></div>
+  <div class="tile"><a href="/duplicates?method=image" class="label">Same photo, other metadata</a><div class="value">{{ "{:,}".format(stats.image_groups) }}</div>
+    <div class="muted small">groups, {{ stats.image_wasted | bytes }}</div></div>
   <div class="tile"><div class="label">Indexed</div><div class="value">{{ "{:,}".format(stats.files) }}</div>
-    <div class="muted small">files, {{ stats.bytes | bytes }}</div></div>
+    <div class="muted small">files, {{ stats.bytes | bytes }}; {{ "{:,}".format(stats.media) }} with metadata</div></div>
   <div class="tile"><div class="label">Index size</div><div class="value">{{ stats.index_bytes | bytes }}</div>
     <div class="muted small">{{ "{:,}".format(stats.full_hashed) }} files fully hashed</div></div>
 </section>

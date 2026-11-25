@@ -1,12 +1,22 @@
 {% extends "base.html" %}
 {% block title %}Duplicates · deedup{% endblock %}
 {% block content %}
+<nav class="tabs">
+  {% for key, label in methods.items() %}
+  <a href="/duplicates{{ '?method=' ~ key if key != 'exact' }}" class="{{ 'on' if flt.method == key }}">{{ label }}
+    <span class="count">{{ "{:,}".format(counts[key][0]) }} · {{ counts[key][1] | bytes }}</span></a>
+  {% endfor %}
+</nav>
+
 <section class="card">
   <form method="get" action="/duplicates" class="row filters">
+    {% if flt.method != "exact" %}<input type="hidden" name="method" value="{{ flt.method }}">{% endif %}
+    {% if flt.method == "exact" %}
     <select name="category">
       <option value="">All types</option>
       {% for c in categories %}<option value="{{ c }}" {{ "selected" if flt.category == c }}>{{ c }}</option>{% endfor %}
     </select>
+    {% endif %}
     <select name="disk">
       <option value="">All disks</option>
       {% for d in disks %}<option value="{{ d }}" {{ "selected" if flt.disk == d }}>{{ d }}</option>{% endfor %}
@@ -14,27 +24,55 @@
     <input type="search" name="q" value="{{ flt.q }}" placeholder="Path contains…">
     <label class="small">Min size <input type="number" name="min_mb" value="{{ min_mb }}" min="0" step="any" style="width:6em"> MB</label>
     <button>Filter</button>
+    {% if flt.group %}<a href="/duplicates{{ '?method=' ~ flt.method if flt.method != 'exact' }}">Show all groups</a>{% endif %}
     <span class="spacer"></span>
     <a class="button secondary" href="/export/duplicates.csv{{ '?' ~ qs if qs }}">Export CSV</a>
     <a class="button secondary" href="/export/duplicates.json{{ '?' ~ qs if qs }}">Export JSON</a>
   </form>
-  <p><strong>{{ "{:,}".format(total) }}</strong> exact duplicate groups, <strong>{{ wasted | bytes }}</strong> reclaimable.
+  {% if flt.method == "exact" %}
+  <p><strong>{{ "{:,}".format(total) }}</strong> groups of byte-identical files, <strong>{{ wasted | bytes }}</strong> reclaimable.
     <span class="muted small">Sorted by reclaimable space. Hardlinked paths share one copy on disk and are not counted as waste.</span></p>
+  {% else %}
+  <p><strong>{{ "{:,}".format(total) }}</strong> photos stored more than once with different metadata, <strong>{{ wasted | bytes }}</strong> reclaimable.
+    <span class="muted small">The image data is identical; only EXIF, XMP, GPS, dates or embedded thumbnails differ.
+    Highlighted fields differ between copies. Reclaimable space keeps the largest copy, which usually has the most metadata.</span></p>
+  {% if not settings.image_matching %}<p class="flash err">Photo matching is turned off on the Setup screen.</p>{% endif %}
+  {% endif %}
 </section>
 
-{% for g in groups %}
-<details class="group card" {{ "open" if loop.index <= 3 }}>
+{% for g in groups %}{% set ms = members[g.id] %}
+<details class="group card" {{ "open" if loop.index <= (6 if flt.method == "image" else 3) }}>
   <summary>
     <span class="wasted">{{ g.wasted | bytes }}</span>
-    <span>{{ g.copies }} copies of {{ g.size | bytes }}</span>
+    <span>{{ g.copies }} copies{% if flt.method == "exact" %} of {{ g.size | bytes }}{% endif %}</span>
     <span class="pill">{{ g.category }}</span>
-    <span class="path muted" title="{{ members[g.id][0].user_path }}">{{ members[g.id][0].user_path }}</span>
+    <span class="path muted" title="{{ ms[0].user_path }}">{{ ms[0].user_path }}</span>
   </summary>
+  {% if flt.method == "image" %}
+  <div class="photos" style="margin-top:10px">
+    {% for m in ms %}
+    <div class="photo">
+      <a href="/file/{{ m.file_id }}"><img class="thumb m" loading="lazy" src="/thumb/{{ m.file_id }}" alt=""></a>
+      <div class="meta">
+        <div title="{{ m.user_path }}"><a href="/file/{{ m.file_id }}">{{ m.user_path.rsplit("/", 1)[-1] }}</a></div>
+        <div class="muted" title="{{ m.user_path }}">{{ m.user_path.rsplit("/", 1)[0] }}</div>
+        <div>{{ m.disk }} {% if m.hardlinked %}<span class="pill">hardlink</span>{% endif %}</div>
+        <div><span class="{{ 'differs' if 'size' in m.differs }}">{{ m.size | bytes }}</span>
+          {% if m.dims %}· <span class="{{ 'differs' if 'dims' in m.differs }}">{{ m.dims }}</span>{% endif %}</div>
+        <div title="Date taken"><span class="{{ 'differs' if 'taken_at' in m.differs }}">{{ m.taken_at or "no date taken" }}</span></div>
+        <div><span class="{{ 'differs' if 'camera' in m.differs }}">{{ m.camera or "no camera" }}</span></div>
+        <div><span class="{{ 'differs' if 'gps' in m.differs }}">{{ "GPS " ~ m.gps if m.gps else "no GPS" }}</span></div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
   <table class="members">
-    <thead><tr><th>Path</th><th>Disk</th><th class="col-mtime">Modified</th><th></th></tr></thead>
-    {% for m in members[g.id] %}
+    <thead><tr>{% if ms[0].thumb %}<th></th>{% endif %}<th>Path</th><th>Disk</th><th class="col-mtime">Modified</th><th></th></tr></thead>
+    {% for m in ms %}
     <tr>
-      <td class="path" title="{{ m.path }}">{{ m.user_path }}</td>
+      {% if ms[0].thumb %}<td><img class="thumb s" loading="lazy" src="/thumb/{{ m.file_id }}?s=160" alt=""></td>{% endif %}
+      <td class="path" title="{{ m.path }}"><a href="/file/{{ m.file_id }}">{{ m.user_path }}</a></td>
       <td>{{ m.disk }}</td>
       <td class="muted col-mtime">{{ m.mtime | time }}</td>
       <td>{% if m.hardlinked %}<span class="pill" title="Same inode as another path in this group">hardlink</span>{% endif %}</td>
@@ -42,9 +80,10 @@
     {% endfor %}
   </table>
   <div class="muted small">BLAKE3 {{ g.key[:16] }}…</div>
+  {% endif %}
 </details>
 {% else %}
-<section class="card"><p class="muted">No duplicate groups{% if qs %} match these filters{% else %} yet. Run a scan from the <a href="/">Dashboard</a>{% endif %}.</p></section>
+<section class="card"><p class="muted">No groups{% if flt.q or flt.category or flt.disk or flt.min_size or flt.group %} match these filters{% else %} yet. Run a scan from the <a href="/">Dashboard</a>{% endif %}.</p></section>
 {% endfor %}
 
 {% if pages > 1 %}

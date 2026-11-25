@@ -24,3 +24,7 @@ def group_category(exts: list[str]) -> str:
     cats = Counter(category(e) for e in exts)
     known = [(n, c) for c, n in cats.items() if c != "other"]
     return max(known)[1] if known else "other"
+
+
+def exts_for(cat: str) -> list[str]:
+    return sorted(_CATS.get(cat, "").split())

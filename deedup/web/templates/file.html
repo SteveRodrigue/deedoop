@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}{{ f.name }} · deedup{% endblock %}
+{% block content %}
+<section class="card">
+  <h2 style="overflow-wrap:anywhere">{{ f.name }}</h2>
+  <p class="muted small" style="overflow-wrap:anywhere">{{ f.user_path }}</p>
+  <div class="cols">
+    <div>
+      {% if f.thumb %}<img class="thumb l" src="/thumb/{{ f.id }}?s=640" alt="Preview of {{ f.name }}">
+      {% else %}<p class="muted">No preview for this file type.</p>{% endif %}
+    </div>
+    <dl class="kv">
+      <dt>Size</dt><dd>{{ f.size | bytes }} ({{ "{:,}".format(f.size) }} bytes)</dd>
+      <dt>Modified</dt><dd>{{ f.mtime | time }}</dd>
+      <dt>Disk</dt><dd>{{ f.disk }}</dd>
+      <dt>Physical path</dt><dd class="mono">{{ f.path }}</dd>
+      {% if f.nlink > 1 %}<dt>Hardlinks</dt><dd>{{ f.nlink }} paths share this file</dd>{% endif %}
+      {% if f.mime %}<dt>Type</dt><dd>{{ f.mime }}</dd>{% endif %}
+      {% if f.taken_at %}<dt>Taken</dt><dd>{{ f.taken_at }}</dd>{% endif %}
+      {% if f.camera %}<dt>Camera</dt><dd>{{ f.camera }}</dd>{% endif %}
+      {% if f.dims %}<dt>Resolution</dt><dd>{{ f.dims }}</dd>{% endif %}
+      {% if f.duration %}<dt>Duration</dt><dd>{{ "%.1f" | format(f.duration) }} s</dd>{% endif %}
+      {% if f.gps %}<dt>GPS</dt><dd>{{ "%.6f" | format(f.gps_lat) }}, {{ "%.6f" | format(f.gps_lon) }}
+        <a class="small" href="https://www.openstreetmap.org/?mlat={{ f.gps_lat }}&mlon={{ f.gps_lon }}#map=15/{{ f.gps_lat }}/{{ f.gps_lon }}" rel="noreferrer noopener" target="_blank">map</a></dd>{% endif %}
+      {% if f.orientation and f.orientation != 1 %}<dt>Orientation</dt><dd>EXIF {{ f.orientation }}</dd>{% endif %}
+      {% if f.error %}<dt>Problem</dt><dd>{{ f.error }}</dd>{% endif %}
+    </dl>
+  </div>
+</section>
+
+<section class="card">
+  <h2>Duplicates</h2>
+  {% if f.groups %}
+  <ul>
+    {% for g in f.groups %}
+    <li><a href="/duplicates?method={{ g.method }}&group={{ g.id }}">{{ "Exact copy" if g.method == "exact" else "Same photo, different metadata" }}</a>:
+      {{ g.copies }} copies, {{ g.wasted | bytes }} reclaimable</li>
+    {% endfor %}
+  </ul>
+  {% else %}<p class="muted">This file has no known duplicates.</p>{% endif %}
+</section>
+
+<section class="card">
+  <h2>Hashes</h2>
+  {% if f.hashes %}
+  <dl class="kv">
+    {% set names = {"partial": "Quick hash (xxh3-128, first and last 64 KB)", "blake3": "Content (BLAKE3)",
+                    "img_exact": "Image data (BLAKE3, metadata ignored)", "img_none": "Image data"} %}
+    {% for k, v in f.hashes.items() %}<dt>{{ names.get(k, k) }}</dt><dd class="mono">{{ v }}</dd>{% endfor %}
+  </dl>
+  {% else %}<p class="muted">Not hashed: no other file has the same size.</p>{% endif %}
+</section>
+{% endblock %}
