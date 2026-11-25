@@ -10,6 +10,10 @@ LABEL org.opencontainers.image.title="deedup" \
       org.opencontainers.image.description="Duplicate finder for Unraid: dedupe your hoard, safely." \
       org.opencontainers.image.source="https://github.com/SteveRodrigue/deedup" \
       org.opencontainers.image.licenses="Apache-2.0"
+# ExifTool reads photo and video metadata (milestone 2).
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends libimage-exiftool-perl \
+ && rm -rf /var/lib/apt/lists/*
 COPY --from=build /install /usr/local
 ENV DEEDUP_CONFIG=/config \
     DEEDUP_MNT=/mnt \

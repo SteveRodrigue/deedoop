@@ -10,10 +10,13 @@
   --warn: #b26a00;
   --err: #c03535;
   --bar: #9db9ef;
+  --hl: #fff3c4;
+  --thumb-bg: #eceef2;
   color-scheme: light;
 }
+/* Dark theme: the system setting, unless the toggle says light; or the toggle says dark. */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #11141a;
     --card: #1a1f28;
     --ink: #e6e9ef;
@@ -25,8 +28,26 @@
     --warn: #e0a344;
     --err: #ef6b6b;
     --bar: #36558f;
+    --hl: #4a3f12;
+    --thumb-bg: #232a36;
     color-scheme: dark;
   }
+}
+:root[data-theme="dark"] {
+  --bg: #11141a;
+  --card: #1a1f28;
+  --ink: #e6e9ef;
+  --muted: #98a2b3;
+  --line: #2b3240;
+  --accent: #6b9cf0;
+  --accent-ink: #0d1117;
+  --ok: #4cc38a;
+  --warn: #e0a344;
+  --err: #ef6b6b;
+  --bar: #36558f;
+  --hl: #4a3f12;
+  --thumb-bg: #232a36;
+  color-scheme: dark;
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--ink);
@@ -40,7 +61,7 @@ header.top { display: flex; align-items: center; gap: 24px; padding: 10px 24px; 
 nav { display: flex; gap: 4px; flex-wrap: wrap; }
 nav a { padding: 6px 12px; border-radius: 6px; color: var(--muted); }
 nav a.on { background: var(--bg); color: var(--ink); font-weight: 600; }
-.ro { margin-left: auto; font-size: 12px; color: var(--ok); border: 1px solid var(--ok); border-radius: 999px; padding: 1px 10px; }
+.ro { margin-left: auto; white-space: nowrap; font-size: 12px; color: var(--ok); border: 1px solid var(--ok); border-radius: 999px; padding: 1px 10px; }
 main { max-width: 1200px; margin: 0 auto; padding: 20px 16px 40px; }
 footer { text-align: center; color: var(--muted); font-size: 12px; padding: 20px; }
 h2 { font-size: 16px; margin: 0 0 12px; }
@@ -90,7 +111,38 @@ details.group .wasted { font-weight: 700; min-width: 80px; font-variant-numeric:
 details.group .path { flex: 1; }
 .members .path { max-width: 700px; }
 .pager { display: flex; gap: 16px; justify-content: center; align-items: center; }
+/* theme toggle */
+.theme { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; padding: 2px; gap: 2px; }
+.theme button { background: transparent; color: var(--muted); border-radius: 999px; padding: 4px 6px; line-height: 0; }
+.theme button[aria-pressed="true"] { background: var(--bg); color: var(--ink); }
+.theme svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+/* tabs */
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 14px; flex-wrap: wrap; }
+.tabs a { padding: 8px 14px; color: var(--muted); border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.tabs a.on { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
+.tabs .count { font-size: 12px; color: var(--muted); margin-left: 4px; }
+/* thumbnails */
+.thumb { display: block; object-fit: cover; border-radius: 6px; background: var(--thumb-bg); }
+.thumb.s { width: 48px; height: 48px; }
+.thumb.m { width: 160px; height: 120px; }
+.thumb.l { max-width: 100%; width: 640px; height: auto; max-height: 520px; object-fit: contain; }
+.photos { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
+.photo { border: 1px solid var(--line); border-radius: 8px; padding: 8px; background: var(--card); min-width: 0; }
+.photo .thumb.m { width: 100%; height: 140px; }
+.photo .meta { font-size: 12px; margin-top: 6px; }
+.photo .meta div { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.differs { background: var(--hl); border-radius: 3px; padding: 0 3px; }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0; align-content: start; }
+.kv dt { color: var(--muted); }
+.kv dd { margin: 0; overflow-wrap: anywhere; }
+.crumbs { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
+.crumbs span.sep { color: var(--muted); }
+.folders { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.folders a { border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; }
+.mono { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
 @media (max-width: 640px) {
+  .theme { margin-left: 0; }
+  .photos { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
   header.top { padding: 10px 16px; gap: 10px; }
   main { padding: 16px 12px 32px; }
   .card { padding: 14px 12px; }

@@ -52,7 +52,7 @@ def test_end_to_end_setup_scan_report_export(unraid):
         assert "IMG_1 (1).jpg" in r.text and "/user/Photos/IMG_1.jpg" in r.text
 
         r = client.get("/duplicates?category=video")
-        assert "No duplicate groups" in r.text
+        assert "No groups match these filters" in r.text
 
         rows = list(csv.DictReader(io.StringIO(client.get("/export/duplicates.csv").text)))
         assert len(rows) == 2 and {r["disk"] for r in rows} == {"disk1", "disk2"}
@@ -122,3 +122,55 @@ def test_schedule_window():
     assert not in_window(at(8), "01:00", "07:00")
     assert in_window(at(23, 30), "22:00", "06:00") and in_window(at(3), "22:00", "06:00")
     assert not in_window(at(12), "22:00", "06:00")
+
+
+def test_photos_browse_file_page_and_thumbnails(unraid):
+    from tests.test_images import jpeg, photo
+
+    m = unraid.mnt
+    im = photo(21)
+    write(m / "disk1/Photos/2020/summer/a.jpg", jpeg(im, exif={0x010F: "Canon"}))
+    write(m / "disk2/Photos/backup/a-edited.jpg", jpeg(im, exif={0x010F: "Nikon", 0x0110: "D750"}))
+    write(m / "disk2/Photos/notes.txt", b"hello")
+    with make_client(unraid) as client:
+        client.post("/setup/shares", data={"share": ["Photos"]})
+        client.post("/scan/start")
+        wait_idle(client)
+
+        r = client.get("/duplicates?method=image")
+        assert "a-edited.jpg" in r.text and "differs" in r.text
+        assert "Same photo, other metadata" in client.get("/").text
+
+        r = client.get("/browse")
+        assert "2020" in r.text and "backup" in r.text and "notes.txt" in r.text
+        r = client.get("/browse", params={"loc": "share:Photos", "dir": "2020/summer"})
+        assert "a.jpg" in r.text and "notes.txt" not in r.text
+        r = client.get("/browse", params={"loc": "share:Photos", "kind": "image"})
+        assert "a.jpg" in r.text and "a-edited.jpg" in r.text and "notes.txt" not in r.text
+        r = client.get("/browse", params={"loc": "share:Photos", "dups": "1", "view": "grid"})
+        assert "a-edited.jpg" in r.text and "notes.txt" not in r.text
+
+        c = db.connect(unraid.db_path)
+        fid = c.execute("SELECT id FROM files WHERE name = 'a.jpg'").fetchone()[0]
+        gid = c.execute("SELECT id FROM groups WHERE method = 'image'").fetchone()[0]
+        txt = c.execute("SELECT id FROM files WHERE name = 'notes.txt'").fetchone()[0]
+        c.close()
+        r = client.get(f"/file/{fid}")
+        assert "Image data (BLAKE3, metadata ignored)" in r.text and f"group={gid}" in r.text
+        r = client.get(f"/duplicates?method=image&group={gid}")
+        assert "Show all groups" in r.text
+
+        r = client.get(f"/thumb/{fid}")
+        assert r.status_code == 200 and r.headers["content-type"] == "image/jpeg" and r.content[:2] == b"\xff\xd8"
+        assert list((unraid.config_dir / "thumbs").rglob("*.jpg"))  # cached in /config, never next to the photo
+        assert client.get(f"/thumb/{txt}").status_code == 404
+        assert client.get("/file/999999").status_code == 404
+
+
+def test_theme_toggle_is_on_every_page(unraid):
+    with make_client(unraid) as client:
+        for path in ("/", "/duplicates", "/browse", "/setup", "/same-path"):
+            r = client.get(path)
+            assert 'data-theme-choice="dark"' in r.text and "deedup-theme" in r.text, path
+        css = client.get("/static/style.css").text
+        assert ':root[data-theme="dark"]' in css and ':root:not([data-theme="light"])' in css

@@ -14,7 +14,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -23,6 +23,8 @@ from ..categories import CATEGORIES
 from ..config import AppConfig
 from ..config import load as load_config
 from ..discovery import RootError, add_custom_root, list_disks, list_shares, remove_root, sync_share_roots
+from ..imaging import THUMB_EXTS, NotAnImage, make_thumbnail
+from ..metadata import exiftool_available
 from ..worker import Worker
 
 HERE = Path(__file__).parent
@@ -146,7 +148,7 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
             return render(request, "setup.html", disks=disks, shares=shares, settings=settings,
                           roots=roots, root_counts=queries.root_counts(c), disk_files=disk_files,
                           bench=json.loads(bench["result"]) if bench else None, error=error, saved=saved,
-                          mnt=str(cfg.mnt), **job_view(c))
+                          mnt=str(cfg.mnt), exiftool=exiftool_available(), **job_view(c))
         finally:
             c.close()
 
@@ -197,6 +199,8 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
         schedule_enabled: str = Form(""),
         schedule_start: str = Form("01:00"),
         schedule_end: str = Form("07:00"),
+        image_matching: str = Form(""),
+        metadata: str = Form(""),
     ):
         if disk_mode not in ("single", "parallel"):
             return RedirectResponse("/setup?error=Unknown+disk+mode", status_code=303)
@@ -217,6 +221,8 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
                 "schedule_enabled": bool(schedule_enabled),
                 "schedule_start": schedule_start,
                 "schedule_end": schedule_end,
+                "image_matching": bool(image_matching),
+                "metadata": bool(metadata),
             })
         finally:
             c.close()
@@ -246,21 +252,87 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
         return RedirectResponse("/setup?saved=benchmark#benchmark", status_code=303)
 
     @app.get("/duplicates", response_class=HTMLResponse)
-    def duplicates(request: Request, category: str = "", q: str = "", min_mb: float = 0, disk: str = "",
-                   page: int = 1):
-        flt = queries.GroupFilter(category=category, q=q, min_size=int(min_mb * 1e6), disk=disk, page=page)
+    def duplicates(request: Request, method: str = "exact", category: str = "", q: str = "", min_mb: float = 0,
+                   disk: str = "", group: int = 0, page: int = 1):
+        method = method if method in queries.METHODS else "exact"
+        flt = queries.GroupFilter(method=method, category=category, q=q, min_size=int(min_mb * 1e6), disk=disk,
+                                  group=group, page=page)
         c = conn()
         try:
             groups, total, wasted = queries.list_groups(c, flt)
             members = queries.group_members(c, [g["id"] for g in groups])
             disks = [r["disk"] for r in queries.per_disk(c)]
             pages = max(1, -(-total // flt.per_page))
-            qs = _q_params(category=category, q=q, min_mb=min_mb or "", disk=disk)
+            qs = _q_params(method=method if method != "exact" else "", category=category, q=q,
+                           min_mb=min_mb or "", disk=disk, group=group or "")
+            counts = {m: c.execute("SELECT COUNT(*), COALESCE(SUM(wasted), 0) FROM groups WHERE method = ?",
+                                   (m,)).fetchone() for m in queries.METHODS}
             return render(request, "duplicates.html", groups=groups, members=members, total=total,
                           wasted=wasted, flt=flt, pages=pages, categories=CATEGORIES, disks=disks, qs=qs,
-                          min_mb=min_mb or "")
+                          min_mb=min_mb or "", methods=queries.METHODS, counts=counts,
+                          settings=db.get_settings(c))
         finally:
             c.close()
+
+    @app.get("/browse", response_class=HTMLResponse)
+    def browse(request: Request, loc: str = "", dir: str = "", q: str = "", kind: str = "", year: str = "",
+               camera: str = "", no_gps: str = "", no_date: str = "", dups: str = "", page: int = 1,
+               view: str = "list"):
+        c = conn()
+        try:
+            locs = queries.locations(c)
+            if not loc and locs:
+                loc = locs[0]["key"]
+            flt = queries.BrowseFilter(loc=loc, dir=dir.strip("/"), q=q, kind=kind, year=year, camera=camera,
+                                       no_gps=bool(no_gps), no_date=bool(no_date), dups=bool(dups), page=page)
+            res = queries.browse(c, flt)
+            crumbs, acc = [], []
+            for part in flt.dir.split("/") if flt.dir else []:
+                acc.append(part)
+                crumbs.append((part, "/".join(acc)))
+            filters = _q_params(q=q, kind=kind, year=year, camera=camera, no_gps=no_gps, no_date=no_date,
+                                dups=dups, view=view if view != "list" else "")
+            return render(request, "browse.html", locs=locs, flt=flt, res=res, crumbs=crumbs,
+                          facets=queries.facets(c), categories=CATEGORIES, view=view, filters=filters,
+                          pages=max(1, -(-res["total"] // flt.per_page)), loc=loc)
+        finally:
+            c.close()
+
+    @app.get("/file/{file_id}", response_class=HTMLResponse)
+    def file_page(request: Request, file_id: int):
+        c = conn()
+        try:
+            f = queries.file_detail(c, file_id)
+            if f is None:
+                return Response("No such file in the index", status_code=404)
+            return render(request, "file.html", f=f)
+        finally:
+            c.close()
+
+    @app.get("/thumb/{file_id}")
+    def thumb(file_id: int, s: int = 320):
+        size = 160 if s <= 160 else 320 if s <= 320 else 640
+        c = conn()
+        try:
+            r = c.execute(
+                "SELECT f.dir, f.name, f.ext, f.size, f.mtime_ns, r.path FROM files f "
+                "JOIN roots r ON r.id = f.root_id WHERE f.id = ?", (file_id,)).fetchone()
+        finally:
+            c.close()
+        if r is None or r["ext"] not in THUMB_EXTS:
+            return Response(status_code=404)
+        folder = cfg.config_dir / "thumbs" / str(size) / f"{file_id % 256:02x}"
+        dest = folder / f"{file_id}-{r['mtime_ns']}-{r['size']}.jpg"
+        if not dest.exists():
+            for old in folder.glob(f"{file_id}-*.jpg"):  # the file changed since
+                old.unlink(missing_ok=True)
+            src = str(Path(r["path"]) / r["dir"] / r["name"])
+            try:
+                make_thumbnail(src, dest, size)
+            except (NotAnImage, OSError):
+                return Response(PLACEHOLDER_SVG, media_type="image/svg+xml",
+                                headers={"Cache-Control": "max-age=300"})
+        return FileResponse(dest, media_type="image/jpeg", headers={"Cache-Control": "max-age=86400"})
 
     @app.get("/same-path", response_class=HTMLResponse)
     def same_path(request: Request):
@@ -272,8 +344,8 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
             c.close()
 
     @app.get("/export/duplicates.{fmt}")
-    def export(fmt: str, category: str = "", q: str = "", min_mb: float = 0, disk: str = ""):
-        flt = queries.GroupFilter(category=category, q=q, min_size=int(min_mb * 1e6), disk=disk)
+    def export(fmt: str, method: str = "exact", category: str = "", q: str = "", min_mb: float = 0, disk: str = ""):
+        flt = queries.GroupFilter(method=method, category=category, q=q, min_size=int(min_mb * 1e6), disk=disk)
         if fmt not in ("csv", "json"):
             return Response(status_code=404)
         c = conn()
@@ -341,6 +413,12 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
         return {"ok": True}
 
     return app
+
+
+PLACEHOLDER_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 30"><rect width="40" height="30" fill="#8884"/>'
+    '<path d="M8 22l8-9 6 6 4-4 6 7z" fill="#8888"/></svg>'
+)
 
 
 def _q(s: str) -> str:

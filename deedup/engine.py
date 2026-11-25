@@ -30,11 +30,16 @@ from .categories import group_category
 from .control import Control, Status
 from .discovery import natural_key, sync_share_roots
 from .hashing import Expected, FileChanged, full_hash, partial_hash
+from .imaging import IMAGE_HASH_EXTS, MAX_IMAGE_BYTES, NotAnImage, read_and_hash_image
+from .metadata import METADATA_EXTS, Reader, exiftool_available
 from .scanner import Excluder, walk_root
 
 log = logging.getLogger("deedup.engine")
 
 FLUSH_SECONDS = 2.0
+META_BATCH = 100
+# Phases whose progress is shown in bytes rather than files.
+BYTE_PHASES = {"hash_full", "hash_image"}
 
 
 @dataclass
@@ -94,30 +99,40 @@ def run_scan(ctx: ScanContext) -> dict:
                 c.close()
 
         for_each_disk(disks, settings, walk_disk)
-        _save_cursor(conn, ctx.job_id, {"phase": "hash_partial"})
-
-        # 2. partial hashes, 3. full hashes
+        _save_cursor(conn, ctx.job_id, {"phase": "walked"})
         min_size = max(1, int(settings["min_size"]))
-        for phase in ("hash_partial", "hash_full"):
+
+        def run_phase(phase: str, todo: list[sqlite3.Row], worker) -> None:
             st.set(phase=phase)
-            todo = _candidates(conn, phase, min_size)
-            by_disk = {d: [] for d in disks}
+            by_disk: dict[str, list] = {d: [] for d in disks}
             for row in todo:
                 by_disk.setdefault(row["disk"], []).append(row)
             for d, rows in by_disk.items():
                 st.disk(d, state="waiting" if rows else "idle", todo_files=len(rows),
-                        todo_bytes=sum(r["size"] for r in rows) if phase == "hash_full" else 0,
+                        todo_bytes=sum(r["size"] for r in rows) if phase in BYTE_PHASES else 0,
                         done_files=0, done_bytes=0, current="")
-
-            def hash_disk(disk: str, phase=phase, by_disk=by_disk) -> None:
-                _hash_disk(ctx, disk, phase, by_disk.get(disk, []), settings)
-
-            for_each_disk([d for d in disks if by_disk.get(d)], settings, hash_disk)
+            for_each_disk([d for d in disks if by_disk.get(d)], settings,
+                          lambda disk: worker(ctx, disk, phase, by_disk.get(disk, []), settings))
             _save_cursor(conn, ctx.job_id, {"phase": phase + "_done"})
 
-        # 4. groups
+        # 2. photos: one full read gives the image-data hash and the exact hashes
+        if settings["image_matching"]:
+            run_phase("hash_image", _image_candidates(conn, min_size), _hash_disk)
+        # 3. metadata: headers only, through ExifTool
+        if settings["metadata"]:
+            if exiftool_available():
+                run_phase("metadata", _metadata_candidates(conn), _metadata_disk)
+            else:
+                log.warning("exiftool not found; skipping metadata")
+        # 4. partial hashes, 5. full hashes
+        for phase in ("hash_partial", "hash_full"):
+            run_phase(phase, _candidates(conn, phase, min_size), _hash_disk)
+
+        # 6. groups
         st.set(phase="group")
         summary = rebuild_exact_groups(conn, min_size)
+        img = rebuild_image_groups(conn, min_size) if settings["image_matching"] else _drop_groups(conn, "image")
+        summary.update({"image_groups": img["groups"], "image_wasted": img["wasted"]})
         st.set(phase="done")
         return summary
     finally:
@@ -161,6 +176,56 @@ def _candidates(conn: sqlite3.Connection, phase: str, min_size: int) -> list[sql
     return conn.execute(sql, {"min": min_size}).fetchall()
 
 
+def _image_candidates(conn: sqlite3.Connection, min_size: int) -> list[sqlite3.Row]:
+    exts = sorted(IMAGE_HASH_EXTS)
+    live = _LIVE.format(extra=", f.ext", join="")
+    sql = f"""
+        WITH live AS ({live} AND f.ext IN ({",".join("?" * len(exts))}) AND f.size <= {MAX_IMAGE_BYTES})
+        SELECT * FROM live
+        WHERE NOT EXISTS (SELECT 1 FROM hashes h WHERE h.file_id = live.id AND h.kind IN ('img_exact', 'img_none'))
+        ORDER BY live.disk, live.dev, live.inode
+    """
+    return conn.execute(sql.replace(":min", "?"), [min_size, *exts]).fetchall()
+
+
+def _metadata_candidates(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    exts = sorted(METADATA_EXTS)
+    live = _LIVE.format(extra=", f.ext", join="")
+    sql = f"""
+        WITH live AS ({live} AND f.ext IN ({",".join("?" * len(exts))}))
+        SELECT * FROM live WHERE NOT EXISTS (SELECT 1 FROM media m WHERE m.file_id = live.id)
+        ORDER BY live.disk, live.root_path, live.dir, live.name
+    """
+    return conn.execute(sql.replace(":min", "?"), [1, *exts]).fetchall()
+
+
+def _metadata_disk(ctx: ScanContext, disk: str, phase: str, rows: list[sqlite3.Row], settings: dict) -> None:
+    st, control = ctx.status, ctx.control
+    conn = db.connect(ctx.db_path)
+    st.disk(disk, state="reading metadata")
+    try:
+        with Reader() as reader:
+            for i in range(0, len(rows), META_BATCH):
+                control.checkpoint()
+                batch = rows[i:i + META_BATCH]
+                paths = {os.path.join(r["root_path"], r["dir"], r["name"]): r["id"] for r in batch}
+                st.disk(disk, current=next(iter(paths)))
+                found = reader.read(list(paths))
+                now = time.time()
+                with db.Tx(conn):
+                    conn.executemany(
+                        "INSERT OR REPLACE INTO media(file_id, mime, taken_at, camera, width, height, duration, "
+                        "gps_lat, gps_lon, orientation, extracted_at, error) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                        [(fid, m.mime, m.taken_at, m.camera, m.width, m.height, m.duration, m.gps_lat,
+                          m.gps_lon, m.orientation, now, m.error)
+                         for p, fid in paths.items() for m in [found[p]]],
+                    )
+                st.add(disk, "done_files", len(batch))
+        st.disk(disk, state="done", current="")
+    finally:
+        conn.close()
+
+
 def _hash_disk(ctx: ScanContext, disk: str, phase: str, rows: list[sqlite3.Row], settings: dict) -> None:
     st, control = ctx.status, ctx.control
     conn = db.connect(ctx.db_path)
@@ -186,7 +251,7 @@ def _hash_disk(ctx: ScanContext, disk: str, phase: str, rows: list[sqlite3.Row],
         pending, errors = [], []
         last_flush = time.monotonic()
 
-    st.disk(disk, state="hashing" if phase == "hash_partial" else "reading")
+    st.disk(disk, state={"hash_partial": "hashing", "hash_image": "reading photos"}.get(phase, "reading"))
     try:
         for row in rows:
             control.checkpoint()
@@ -200,7 +265,12 @@ def _hash_disk(ctx: ScanContext, disk: str, phase: str, rows: list[sqlite3.Row],
             st.disk(disk, current=path)
             exp = Expected(row["size"], row["mtime_ns"])
             try:
-                if phase == "hash_partial":
+                if phase == "hash_image":
+                    got = read_and_hash_image(path, row["ext"], exp, checkpoint=control.checkpoint)
+                    err = got.pop("img_error", None)
+                    values = list(got.items()) + ([("img_none", err)] if err else [])
+                    st.add(disk, "done_bytes", row["size"])
+                elif phase == "hash_partial":
                     part, full = partial_hash(path, exp)
                     values = [("partial", part)] + ([("blake3", full)] if full else [])
                 else:
@@ -213,6 +283,12 @@ def _hash_disk(ctx: ScanContext, disk: str, phase: str, rows: list[sqlite3.Row],
             except FileChanged:
                 errors.append(("changed while reading; will retry next scan", row["id"]))
                 last_phys = None
+                continue
+            except NotAnImage as e:  # too large to hash as an image: exact hashes still follow
+                values = [("img_none", str(e).encode())]
+                pending.extend((row["id"], k, v) for k, v in values)
+                last_phys = None
+                st.add(disk, "done_files", 1)
                 continue
             except OSError as e:
                 errors.append((f"{type(e).__name__}: {e.strerror or e}", row["id"]))
@@ -267,6 +343,60 @@ def rebuild_exact_groups(conn: sqlite3.Connection, min_size: int = 1) -> dict:
             gid = cur.lastrowid
             conn.executemany(
                 "INSERT INTO group_members(group_id, file_id) VALUES (?, ?)", [(gid, m["id"]) for m in members]
+            )
+            groups += 1
+            wasted += w
+            files += len(members)
+    return {"groups": groups, "wasted": wasted, "files": files}
+
+
+def _drop_groups(conn: sqlite3.Connection, method: str) -> dict:
+    conn.execute("DELETE FROM groups WHERE method = ?", (method,))
+    return {"groups": 0, "wasted": 0, "files": 0}
+
+
+def rebuild_image_groups(conn: sqlite3.Connection, min_size: int = 1) -> dict:
+    """Recompute the ``image`` groups: photos with the same image data but
+    different bytes (so their metadata differs). Groups whose members are all
+    byte-identical are left to the ``exact`` method.
+
+    Reclaimable space counts each physical copy once and keeps the largest
+    file, which usually carries the most metadata.
+    """
+    rows = conn.execute(
+        """
+        WITH live AS (
+            SELECT f.id, f.size, f.dev, f.inode, f.ext, i.value AS img, b.value AS full
+            FROM files f
+            JOIN roots r ON r.id = f.root_id
+            JOIN hashes i ON i.file_id = f.id AND i.kind = 'img_exact'
+            JOIN hashes b ON b.file_id = f.id AND b.kind = 'blake3'
+            WHERE f.state = 'present' AND r.enabled = 1 AND f.size >= :min
+        ),
+        keys AS (SELECT img FROM live GROUP BY img HAVING COUNT(DISTINCT full) > 1)
+        SELECT live.* FROM live JOIN keys USING (img) ORDER BY live.img, live.size DESC, live.id
+        """,
+        {"min": min_size},
+    ).fetchall()
+    now = time.time()
+    groups = wasted = files = 0
+    with db.Tx(conn):
+        conn.execute("DELETE FROM groups WHERE method = 'image'")
+        for img, members in itertools.groupby(rows, key=lambda r: r["img"]):
+            members = list(members)
+            phys: dict[tuple, int] = {}
+            for m in members:
+                phys[(m["dev"], m["inode"])] = m["size"]
+            sizes = sorted(phys.values(), reverse=True)
+            w = sum(sizes[1:])
+            cur = conn.execute(
+                "INSERT INTO groups(method, key, size, file_count, copies, wasted, category, built_at) "
+                "VALUES ('image', ?, ?, ?, ?, ?, 'image', ?)",
+                (img.hex(), sizes[0], len(members), len(phys), w, now),
+            )
+            conn.executemany(
+                "INSERT INTO group_members(group_id, file_id) VALUES (?, ?)",
+                [(cur.lastrowid, m["id"]) for m in members],
             )
             groups += 1
             wasted += w

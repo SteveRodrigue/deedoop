@@ -1,7 +1,7 @@
 {# Live scan status. Polled by htmx every 2 s while a job is active. #}
 <div id="status" {% if active %}hx-get="/partials/status" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>
 {% if active %}
-  {% set phase_names = {"starting": "Starting", "walk": "Walking folders", "hash_partial": "Quick hashing same-size files",
+  {% set phase_names = {"starting": "Starting", "walk": "Walking folders", "hash_image": "Reading photos", "metadata": "Reading metadata", "hash_partial": "Quick hashing same-size files",
                         "hash_full": "Full hashing likely duplicates", "group": "Building duplicate groups", "done": "Finishing"} %}
   <div class="row between">
     <div>
@@ -58,7 +58,7 @@
         <span class="muted">finished {{ last.finished_at | time }}</span>
         {% if last.error %}<div class="muted small">{{ last.error.splitlines()[0] }}</div>{% endif %}
         {% set r = last_progress.get("result", {}) %}
-        {% if r.groups is defined %}<div class="small">{{ "{:,}".format(r.groups) }} duplicate groups, {{ r.wasted | bytes }} reclaimable.</div>{% endif %}
+        {% if r.groups is defined %}<div class="small">{{ "{:,}".format(r.groups) }} exact groups ({{ r.wasted | bytes }}){% if r.image_groups is defined %}, {{ "{:,}".format(r.image_groups) }} photos with different metadata ({{ r.image_wasted | bytes }}){% endif %}.</div>{% endif %}
       {% else %}
         No scan yet.
       {% endif %}

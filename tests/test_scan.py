@@ -80,8 +80,8 @@ def test_rescan_is_incremental(unraid, conn, monkeypatch):
 
     m = unraid.mnt
     data = os.urandom(400_000)
-    write(m / "disk1/Photos/a.jpg", data)
-    write(m / "disk2/Photos/b.jpg", data)
+    write(m / "disk1/Photos/a.bin", data)
+    write(m / "disk2/Photos/b.bin", data)
     select(conn, "Photos")
     scan(unraid)
     before = {r[0]: r[1] for r in conn.execute("SELECT file_id, value FROM hashes WHERE kind='blake3'")}
@@ -99,10 +99,10 @@ def test_rescan_is_incremental(unraid, conn, monkeypatch):
     assert after == before
 
     # A changed file loses its hashes and only it is reread.
-    write(m / "disk2/Photos/b.jpg", os.urandom(400_000), mtime=time.time() + 5)
+    write(m / "disk2/Photos/b.bin", os.urandom(400_000), mtime=time.time() + 5)
     assert scan(unraid)["groups"] == 0
-    # Its new partial hash differs from a.jpg, so no full read is needed.
-    assert [os.path.basename(p) for p in reads] == ["b.jpg"]
+    # Its new partial hash differs from a.bin, so no full read is needed.
+    assert [os.path.basename(p) for p in reads] == ["b.bin"]
 
 
 def test_deleted_files_drop_out(unraid, conn):

@@ -76,6 +76,17 @@
   <label>Ignore files smaller than <input type="number" name="min_size" min="1" value="{{ settings.min_size }}"> bytes</label>
 </section>
 
+<section class="card" id="methods">
+  <h2>Match methods</h2>
+  <label class="radio"><input type="checkbox" checked disabled> Exact copies <span class="muted small">(always on: same bytes, any file type)</span></label>
+  <label class="radio"><input type="checkbox" name="image_matching" value="1" {{ "checked" if settings.image_matching }}>
+    Same photo, different metadata <span class="muted small">(reads every JPEG, PNG, HEIC, WebP, TIFF once in full)</span></label>
+  <label class="radio"><input type="checkbox" name="metadata" value="1" {{ "checked" if settings.metadata }}>
+    Read photo and video metadata <span class="muted small">(date taken, camera, resolution, GPS; headers only)</span></label>
+  {% if not exiftool %}<p class="flash err">ExifTool is not installed in this container, so metadata is skipped.</p>{% endif %}
+  <p class="muted small">Similar photos (recompressed or resized copies) arrive in milestone 4.</p>
+</section>
+
 <section class="card" id="disk-mode">
   <h2>Disk mode</h2>
   <label class="radio"><input type="radio" name="disk_mode" value="single" {{ "checked" if settings.disk_mode == "single" }}>
