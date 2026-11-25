@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Saved plans · deedup{% endblock %}
+{% block content %}
+<nav class="tabs">
+  <a href="/reorganize">New plan</a>
+  <a href="/plans" class="on">Saved plans <span class="count">{{ plans | length }}</span></a>
+</nav>
+<section class="card">
+  {% if plans %}
+  <table>
+    <thead><tr><th>Plan</th><th class="num">Would move</th><th class="num hide-phone">Size</th><th class="hide-phone">Needs a look</th><th class="col-mtime">Saved</th></tr></thead>
+    {% for p in plans %}
+    <tr>
+      <td><a href="/plans/{{ p.id }}">{{ p.name }}</a><div class="mono muted path" title="{{ p.rule.template }}">{{ p.rule.template }}</div></td>
+      <td class="num">{{ "{:,}".format(p.moving) }} <span class="muted small">of {{ "{:,}".format(p.total) }}</span></td>
+      <td class="num hide-phone">{{ p.bytes | bytes }}</td>
+      <td class="small hide-phone">{% if p.counts.conflict %}<span class="pill warn">{{ p.counts.conflict }} conflicts</span> {% endif %}
+        {% if p.stale %}<span class="pill warn">{{ p.stale }} changed</span>{% endif %}</td>
+      <td class="muted small col-mtime">{{ p.created_at | time }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}<p class="muted">No saved plans. <a href="/reorganize">Make one</a>, or open a folder in <a href="/browse">Browse</a> and choose “Reorganize these files”.</p>{% endif %}
+</section>
+{% endblock %}

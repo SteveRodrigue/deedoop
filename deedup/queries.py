@@ -390,8 +390,60 @@ FILE_COLUMNS = """
 """.replace("{CONTAINER_COLS}", CONTAINER_COLS)
 
 
-def browse(conn: sqlite3.Connection, flt: BrowseFilter) -> dict:
+def _flat_where(flt: BrowseFilter, roots: list[int]) -> tuple[list[str], list]:
+    """Filters over a folder and everything below it (the search view)."""
     from .categories import exts_for
+
+    rmarks = ",".join("?" * len(roots))
+    sub, sargs = _subtree(flt.dir)
+    where, args = [f"f.root_id IN ({rmarks})", "f.state = 'present'", "f.container_id = 0", sub], roots + sargs
+    if flt.q:
+        where.append("f.name LIKE ? ESCAPE '\\'")
+        args.append("%" + _like_escape(flt.q) + "%")
+    if flt.kind:
+        exts = exts_for(flt.kind)
+        if flt.kind == "other":
+            from .categories import EXT_TO_CAT
+
+            exts = sorted(EXT_TO_CAT)
+            where.append(f"f.ext NOT IN ({','.join('?' * len(exts))})")
+        else:
+            where.append(f"f.ext IN ({','.join('?' * len(exts))})")
+        args += exts
+    if flt.year:
+        where.append("substr(md.taken_at, 1, 4) = ?")
+        args.append(flt.year)
+    if flt.camera:
+        where.append("md.camera = ?")
+        args.append(flt.camera)
+    if flt.no_gps:
+        where.append("md.file_id IS NOT NULL AND md.gps_lat IS NULL")
+    if flt.no_date:
+        where.append("md.file_id IS NOT NULL AND md.taken_at IS NULL")
+    if flt.dups:
+        where.append("EXISTS (SELECT 1 FROM group_members gm WHERE gm.file_id = f.id)")
+    return where, args
+
+
+BROWSE_JOINS = ("FROM files f JOIN roots r ON r.id = f.root_id LEFT JOIN media md ON md.file_id = f.id "
+                + CONTAINER_JOINS)
+
+
+def selection(conn: sqlite3.Connection, flt: BrowseFilter, limit: int = 0) -> list[sqlite3.Row]:
+    """Every loose file in the folder and below it that matches the filters
+    (at most ``limit`` when it is set)."""
+    roots, _ = loc_roots(conn, flt.loc)
+    if not roots:
+        return []
+    where, args = _flat_where(flt, roots)
+    return conn.execute(
+        f"SELECT {FILE_COLUMNS}, f.dev, f.inode, r.share, r.id AS root_id, sj.taken_at AS json_taken {BROWSE_JOINS} "
+        "LEFT JOIN sidecars sc ON sc.file_id = f.id LEFT JOIN sidecar_json sj ON sj.file_id = sc.json_file_id "
+        f"WHERE {' AND '.join(where)} ORDER BY f.dir, f.name" + (f" LIMIT {int(limit)}" if limit else ""),
+        args).fetchall()
+
+
+def browse(conn: sqlite3.Connection, flt: BrowseFilter) -> dict:
 
     roots, base = loc_roots(conn, flt.loc)
     if not roots:
@@ -415,33 +467,7 @@ def browse(conn: sqlite3.Connection, flt: BrowseFilter) -> dict:
         where, args = [f"f.root_id IN ({rmarks})", "f.state = 'present'", "f.container_id = 0", "f.dir = ?"], \
             roots + [flt.dir]
     else:
-        sub, sargs = _subtree(flt.dir)
-        where, args = [f"f.root_id IN ({rmarks})", "f.state = 'present'", "f.container_id = 0", sub], roots + sargs
-        if flt.q:
-            where.append("f.name LIKE ? ESCAPE '\\'")
-            args.append("%" + _like_escape(flt.q) + "%")
-        if flt.kind:
-            exts = exts_for(flt.kind)
-            if flt.kind == "other":
-                from .categories import EXT_TO_CAT
-
-                exts = sorted(EXT_TO_CAT)
-                where.append(f"f.ext NOT IN ({','.join('?' * len(exts))})")
-            else:
-                where.append(f"f.ext IN ({','.join('?' * len(exts))})")
-            args += exts
-        if flt.year:
-            where.append("substr(md.taken_at, 1, 4) = ?")
-            args.append(flt.year)
-        if flt.camera:
-            where.append("md.camera = ?")
-            args.append(flt.camera)
-        if flt.no_gps:
-            where.append("md.file_id IS NOT NULL AND md.gps_lat IS NULL")
-        if flt.no_date:
-            where.append("md.file_id IS NOT NULL AND md.taken_at IS NULL")
-        if flt.dups:
-            where.append("EXISTS (SELECT 1 FROM group_members gm WHERE gm.file_id = f.id)")
+        where, args = _flat_where(flt, roots)
     w = " AND ".join(where)
     joins = f"FROM files f JOIN roots r ON r.id = f.root_id LEFT JOIN media md ON md.file_id = f.id {CONTAINER_JOINS}"
     total = conn.execute(f"SELECT COUNT(*) {joins} WHERE {w}", args).fetchone()[0]

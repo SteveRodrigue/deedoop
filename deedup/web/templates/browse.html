@@ -38,8 +38,10 @@
     {% for name, path in crumbs %}<span class="sep">/</span>
       <a href="/browse?loc={{ loc | urlencode }}&dir={{ path | urlencode }}{{ '&' ~ filters if filters }}">{{ name }}</a>{% endfor %}
   </nav>
+  {% set reorg = "/reorganize?loc=" ~ (loc | urlencode) ~ "&dir=" ~ (flt.dir | urlencode) ~ ("&" ~ filters if filters else "") %}
   {% if flt.flat %}
-  <p class="small muted">{{ "{:,}".format(res.total) }} files match in this folder and below.</p>
+  <p class="small muted">{{ "{:,}".format(res.total) }} files match in this folder and below.
+    {% if res.total %}<a href="{{ reorg }}">Reorganize these files</a>{% endif %}</p>
   {% else %}
     {% if res.subdirs %}
     <div class="folders">
@@ -48,7 +50,8 @@
       {% endfor %}
     </div>
     {% endif %}
-    <p class="small muted">{{ "{:,}".format(res.total) }} files in this folder.</p>
+    <p class="small muted">{{ "{:,}".format(res.total) }} files in this folder.
+      <a href="{{ reorg }}">Reorganize this folder and below</a></p>
   {% endif %}
 </section>
 

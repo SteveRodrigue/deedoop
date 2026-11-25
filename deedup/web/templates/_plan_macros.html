@@ -1,0 +1,23 @@
+{% macro status_pill(s, statuses) %}<span class="pill {{ 'ok' if s in ('move', 'copy', 'renamed') else 'warn' if s == 'conflict' else 'dup' if s == 'duplicate' else '' }}">{{ statuses[s] }}</span>{% endmacro %}
+{% macro item_row(i, statuses) %}
+<tr>
+  <td class="hide-phone">{% if i.thumb %}<a href="/file/{{ i.file_id }}"><img class="thumb s" loading="lazy" src="/thumb/{{ i.file_id }}?s=160" alt=""></a>{% endif %}</td>
+  <td class="move">
+    <div class="path" title="{{ i.src_user }}"><a href="/file/{{ i.file_id }}">{{ i.src_user }}</a></div>
+    {% if i.dst_user and i.dst_user != i.src_user %}<div class="path to" title="{{ i.dst_user }}">→ {{ i.dst_user }}</div>{% endif %}
+    {% if i.note %}<div class="muted small">{{ i.note }}</div>{% endif %}
+  </td>
+  <td>{{ status_pill(i.status, statuses) }}{% if i.stale %} <span class="pill warn" title="The file changed or disappeared since the plan was saved">changed</span>{% endif %}</td>
+  <td class="num small hide-phone">{{ i.size | bytes }}</td>
+</tr>
+{% endmacro %}
+{% macro folder_table(folders, total) %}
+<table>
+  <thead><tr><th>Destination folder</th><th class="num">Files</th><th class="barcell hide-phone"></th></tr></thead>
+  {% set top = (folders[0][1] if folders else 1) %}
+  {% for f, n in folders %}
+  <tr><td class="path" title="{{ f }}">{{ f }}</td><td class="num">{{ "{:,}".format(n) }}</td>
+    <td class="barcell hide-phone"><span class="bar" style="width:{{ 100 * n / top }}%"></span></td></tr>
+  {% endfor %}
+</table>
+{% endmacro %}
