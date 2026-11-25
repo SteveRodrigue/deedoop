@@ -201,3 +201,18 @@ table.plan .to { color: var(--ink); font-weight: 500; }
   table.plan th:nth-child(3), table.plan td:nth-child(3) { width: 96px; }
   .col-mtime { display: none; }
 }
+
+/* changes (milestone 6) */
+.ro.on { color: var(--warn); border-color: var(--warn); }
+.bulk { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+.group-actions { margin-top: 10px; }
+tr.marked td { background: var(--hl); }
+label.keep { font-size: 12px; cursor: pointer; }
+.modes label { display: block; margin: 6px 0; }
+.danger-zone { border-color: var(--err); }
+@media (max-width: 640px) {
+  table.changes-list { display: table; table-layout: fixed; width: 100%; }
+  table.changes-list th:nth-child(2), table.changes-list td:nth-child(2) { width: 64px; }
+  table.changes-list th:nth-child(3), table.changes-list td:nth-child(3) { width: 64px; }
+  table.changes-list .path { white-space: normal; word-break: break-all; max-width: none; }
+}

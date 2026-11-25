@@ -245,6 +245,58 @@ MIGRATIONS: list[str] = [
     ) WITHOUT ROWID;
     CREATE INDEX plan_items_status ON plan_items(plan_id, status);
     """,
+    # v6: changes to files (milestone 6): marks, actions and their journal
+    """
+    -- Files you marked for removal, each with the copy that is kept.
+    CREATE TABLE marks (
+        file_id    INTEGER PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE,
+        keep_id    INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+        method     TEXT NOT NULL,         -- exact, image, similar
+        marked_at  REAL NOT NULL
+    );
+    CREATE INDEX marks_keep ON marks(keep_id);
+
+    -- One confirmed change: a batch of removals or the moves of a plan.
+    CREATE TABLE actions (
+        id          INTEGER PRIMARY KEY,
+        kind        TEXT NOT NULL,        -- remove, move
+        mode        TEXT NOT NULL,        -- quarantine, delete, hardlink, move
+        label       TEXT NOT NULL,
+        plan_id     INTEGER,
+        state       TEXT NOT NULL DEFAULT 'queued',  -- queued, running, done, stopped, failed, undone
+        counts      TEXT NOT NULL DEFAULT '{}',
+        job_id      INTEGER,
+        created_at  REAL NOT NULL,
+        finished_at REAL,
+        undone_at   REAL,
+        purged_at   REAL
+    );
+
+    -- The journal: what was done to each file, so it can be checked and undone.
+    CREATE TABLE action_items (
+        action_id   INTEGER NOT NULL REFERENCES actions(id) ON DELETE CASCADE,
+        seq         INTEGER NOT NULL,
+        file_id     INTEGER NOT NULL,
+        keep_id     INTEGER,
+        method      TEXT,                 -- exact, image, similar (removals)
+        src_path    TEXT NOT NULL,        -- where the file was
+        src_user    TEXT NOT NULL,
+        dst_path    TEXT NOT NULL DEFAULT '',  -- quarantine path, or the plan's destination
+        dst_user    TEXT NOT NULL DEFAULT '',
+        keep_path   TEXT NOT NULL DEFAULT '',
+        quarantine  TEXT NOT NULL DEFAULT '',  -- where the original went (moves across devices, hardlinks)
+        size        INTEGER NOT NULL,
+        mtime_ns    INTEGER NOT NULL,
+        keep_size   INTEGER,
+        keep_mtime  INTEGER,
+        made_dirs   TEXT NOT NULL DEFAULT '[]',
+        status      TEXT NOT NULL DEFAULT 'pending',  -- pending, done, skipped, failed, undone, purged
+        note        TEXT NOT NULL DEFAULT '',
+        done_at     REAL,
+        PRIMARY KEY (action_id, seq)
+    ) WITHOUT ROWID;
+    CREATE INDEX action_items_status ON action_items(action_id, status);
+    """,
 ]
 
 DEFAULT_SETTINGS: dict[str, Any] = {
@@ -276,6 +328,10 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "parallel_disks": 2,
     # BLAKE3 threads per large file. 1 is right for spinning disks.
     "hash_threads": 1,
+    # Milestone 6: changes to files. Off until you turn them on in Setup.
+    "allow_changes": False,
+    "allow_direct_delete": False,  # removals skip the quarantine (cannot be undone)
+    "quarantine_days": 30,         # quarantined files are deleted after this many days; 0 keeps them
     "schedule_enabled": False,
     "schedule_start": "01:00",
     "schedule_end": "07:00",

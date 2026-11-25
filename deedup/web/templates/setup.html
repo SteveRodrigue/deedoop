@@ -113,6 +113,26 @@
 </section>
 </form>
 
+<section class="card" id="changes">
+  <h2>Changes to your files</h2>
+  <p class="muted">deedup only reads your disks until you turn this on. Even then, nothing happens until you confirm a
+    list of changes on the <a href="/changes">Changes</a> screen, and every file is checked again just before it is touched.</p>
+  <p>Container access to /mnt:
+    {% if gate.writable %}<span class="pill ok">read-write</span>{% else %}<span class="pill warn">read-only</span>
+    <span class="muted small">To allow changes, edit the container and set the <span class="mono">/mnt</span> path's access mode to read/write.</span>{% endif %}</p>
+  <form method="post" action="/setup/changes">
+    <label class="radio"><input type="checkbox" name="allow_changes" value="1" {{ "checked" if settings.allow_changes }}>
+      <strong>Allow changes:</strong> moving duplicates to quarantine, replacing them with hardlinks, and applying saved plans</label>
+    <label class="radio"><input type="checkbox" name="allow_direct_delete" value="1" {{ "checked" if settings.allow_direct_delete }}>
+      Also offer <strong>delete permanently</strong>, which skips the quarantine and cannot be undone</label>
+    <label>Delete quarantined files after <input type="number" name="quarantine_days" min="0" max="3650" value="{{ settings.quarantine_days }}" style="width:5em"> days
+      <span class="muted small">(0 keeps them until you empty the quarantine)</span></label>
+    <p class="muted small">The quarantine is a hidden <span class="mono">.deedup-quarantine</span> folder inside each share folder on each disk,
+      so a file is renamed, not copied, stays on its disk, and does not create a new share. Scans skip it.</p>
+    <button>Save</button>
+  </form>
+</section>
+
 <section class="card" id="benchmark">
   <h2>Benchmark</h2>
   <p class="muted">Reads a sample of large files from each selected disk alone, then from 2, 3, … disks at once, and measures

@@ -31,11 +31,16 @@ class WalkResult:
     complete: bool = False
 
 
+QUARANTINE_DIR = ".deedup-quarantine"
+
+
 class Excluder:
     def __init__(self, patterns: list[str]):
         self.patterns = [p.strip().strip("/") for p in patterns if p.strip()]
 
     def __call__(self, name: str, rel: str) -> bool:
+        if name == QUARANTINE_DIR:
+            return True  # deedup's own quarantine is never indexed
         for p in self.patterns:
             if fnmatch.fnmatchcase(name, p) or fnmatch.fnmatchcase(rel, p):
                 return True

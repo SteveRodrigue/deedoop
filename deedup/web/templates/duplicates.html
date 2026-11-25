@@ -8,6 +8,14 @@
   {% endfor %}
 </nav>
 
+{% if msg %}<p class="flash ok">{{ msg }}</p>{% endif %}
+{% if marks.files %}
+<section class="card callout row between">
+  <span><strong>{{ "{:,}".format(marks.files) }}</strong> {{ "copy" if marks.files == 1 else "copies" }} marked for removal, {{ marks.bytes | bytes }}.
+    Nothing has changed yet.</span>
+  <a class="button" href="/changes">Review and confirm →</a>
+</section>
+{% endif %}
 <section class="card">
   <form method="get" action="/duplicates" class="row filters">
     {% if flt.method != "exact" %}<input type="hidden" name="method" value="{{ flt.method }}">{% endif %}
@@ -44,18 +52,41 @@
     Highlighted fields differ between copies. Reclaimable space keeps the largest copy, which usually has the most metadata.</span></p>
   {% if not settings.image_matching %}<p class="flash err">Photo matching is turned off on the Setup screen.</p>{% endif %}
   {% endif %}
+  {% if total and flt.method != "similar" %}
+  <form method="post" action="/marks/bulk" class="row bulk">
+    <input type="hidden" name="method" value="{{ flt.method }}"><input type="hidden" name="category" value="{{ flt.category }}">
+    <input type="hidden" name="q" value="{{ flt.q }}"><input type="hidden" name="min_mb" value="{{ min_mb }}">
+    <input type="hidden" name="disk" value="{{ flt.disk }}"><input type="hidden" name="back" value="{{ back }}">
+    <span class="small">In all {{ "{:,}".format(total) }} groups shown, keep</span>
+    <select name="rule" onchange="this.form.text.hidden = this.value != 'path'">
+      {% for k, v in keeper_rules.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}
+    </select>
+    <input type="text" name="text" placeholder="e.g. /mnt/user/Photos" hidden>
+    <button class="secondary">Mark the other copies</button>
+    <span class="muted small">Marks only: you confirm on the Changes screen.</span>
+  </form>
+  {% endif %}
 </section>
 
 {% set photo_grid = flt.method in ("image", "similar") %}
 {% for g in groups %}{% set ms = members[g.id] %}
+{% set gm = marked.get(g.id, []) %}
+{% set ns = namespace(keep=None) %}
+{% for m in ms if not m.in_archive and ns.keep is none %}{% if gm and m.file_id not in gm %}{% set ns.keep = m.file_id %}{% endif %}{% endfor %}
+{% if ns.keep is none %}{% for m in ms if m.keeper and not m.in_archive %}{% set ns.keep = m.file_id %}{% endfor %}{% endif %}
+{% if ns.keep is none %}{% for m in ms if not m.in_archive and ns.keep is none %}{% set ns.keep = m.file_id %}{% endfor %}{% endif %}
 <details class="group card" {{ "open" if loop.index <= (6 if photo_grid else 3) }}>
   <summary>
     <span class="wasted">{{ g.wasted | bytes }}</span>
     <span>{{ g.copies }} copies{% if flt.method == "exact" %} of {{ g.size | bytes }}{% endif %}</span>
     <span class="pill">{{ g.category }}</span>
     {% if flt.method == "similar" %}{% if g.pending %}<a class="pill warn" href="/review">{{ g.pending }} to review</a>{% else %}<span class="pill ok">reviewed</span>{% endif %}{% endif %}
+    {% if gm %}<span class="pill warn">{{ gm | length }} marked</span>{% endif %}
     <span class="path muted" title="{{ ms[0].user_path }}">{{ ms[0].user_path }}</span>
   </summary>
+  <form id="keep-{{ g.id }}" method="post" action="/marks/group"><input type="hidden" name="group_id" value="{{ g.id }}">
+    <input type="hidden" name="back" value="{{ back }}"></form>
+  <form id="clear-{{ g.id }}" method="post" action="/marks/group/{{ g.id }}/clear"><input type="hidden" name="back" value="{{ back }}"></form>
   {% if photo_grid %}
   <div class="photos" style="margin-top:10px">
     {% for m in ms %}
@@ -65,6 +96,8 @@
         <div title="{{ m.user_path }}"><a href="/file/{{ m.file_id }}">{{ m.user_path.rsplit("/", 1)[-1] }}</a></div>
         <div class="muted" title="{{ m.user_path }}">{{ m.user_path.rsplit("/", 1)[0] }}</div>
         {% if flt.method == "similar" and m.keeper %}<div><span class="pill ok">suggested keeper</span></div>{% endif %}
+        {% if not m.in_archive %}<div><label class="keep"><input type="radio" form="keep-{{ g.id }}" name="keep" value="{{ m.file_id }}" {{ "checked" if m.file_id == ns.keep }}> keep</label>
+          {% if m.file_id in gm %}<span class="pill warn">to remove</span>{% endif %}</div>{% endif %}
         <div>{{ m.disk }} {% if m.hardlinked %}<span class="pill">hardlink</span>{% endif %}{% if m.in_archive %}<span class="pill" title="Inside an archive; not counted as reclaimable">in archive</span>{% endif %}</div>
         <div><span class="{{ 'differs' if 'size' in m.differs }}">{{ m.size | bytes }}</span>
           {% if m.dims %}· <span class="{{ 'differs' if 'dims' in m.differs }}">{{ m.dims }}</span>{% endif %}</div>
@@ -77,19 +110,27 @@
   </div>
   {% else %}
   <table class="members">
-    <thead><tr>{% if ms[0].thumb %}<th></th>{% endif %}<th>Path</th><th>Disk</th><th class="col-mtime">Modified</th><th></th></tr></thead>
+    <thead><tr><th>Keep</th>{% if ms[0].thumb %}<th></th>{% endif %}<th>Path</th><th>Disk</th><th class="col-mtime">Modified</th><th></th></tr></thead>
     {% for m in ms %}
-    <tr>
+    <tr class="{{ 'marked' if m.file_id in gm }}">
+      <td>{% if not m.in_archive %}<input type="radio" form="keep-{{ g.id }}" name="keep" value="{{ m.file_id }}" aria-label="Keep this copy" {{ "checked" if m.file_id == ns.keep }}>{% endif %}</td>
       {% if ms[0].thumb %}<td><img class="thumb s" loading="lazy" src="/thumb/{{ m.file_id }}?s=160" alt=""></td>{% endif %}
       <td class="path" title="{{ m.path }}"><a href="/file/{{ m.file_id }}">{{ m.user_path }}</a></td>
       <td>{{ m.disk }}</td>
       <td class="muted col-mtime">{{ m.mtime | time }}</td>
       <td>{% if m.hardlinked %}<span class="pill" title="Same inode as another path in this group">hardlink</span>{% endif %}
-        {% if m.in_archive %}<span class="pill" title="Inside an archive; not counted as reclaimable">in archive</span>{% endif %}</td>
+        {% if m.in_archive %}<span class="pill" title="Inside an archive; not counted as reclaimable">in archive</span>{% endif %}
+        {% if m.file_id in gm %}<span class="pill warn">to remove</span>{% endif %}</td>
     </tr>
     {% endfor %}
   </table>
   <div class="muted small">BLAKE3 {{ g.key[:16] }}…</div>
+  {% endif %}
+  {% if ns.keep is not none %}
+  <div class="row group-actions">
+    <button form="keep-{{ g.id }}" class="small">Keep the selected copy, mark the others for removal</button>
+    {% if gm %}<button form="clear-{{ g.id }}" class="secondary small">Clear marks</button>{% endif %}
+  </div>
   {% endif %}
 </details>
 {% else %}

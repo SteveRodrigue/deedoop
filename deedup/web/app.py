@@ -14,13 +14,14 @@ import secrets
 import zipfile
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Annotated
 
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from .. import __version__, db, plans, queries, similar
+from .. import __version__, changes, db, plans, queries, similar
 from ..archive_index import refresh_coverage
 from ..archives import read_member_bytes
 from ..categories import CATEGORIES
@@ -99,6 +100,12 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
         return db.connect(cfg.db_path)
 
     def render(request: Request, name: str, **ctx) -> HTMLResponse:
+        if "gate" not in ctx:
+            c = conn()
+            try:
+                ctx["gate"] = changes.gate(c, cfg.mnt)
+            finally:
+                c.close()
         return templates.TemplateResponse(request, name, {"nav": name.split(".")[0], **ctx})
 
     def job_view(c) -> dict:
@@ -152,7 +159,8 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
             return render(request, "setup.html", disks=disks, shares=shares, settings=settings,
                           roots=roots, root_counts=queries.root_counts(c), disk_files=disk_files,
                           bench=json.loads(bench["result"]) if bench else None, error=error, saved=saved,
-                          mnt=str(cfg.mnt), exiftool=exiftool_available(), **job_view(c))
+                          mnt=str(cfg.mnt), exiftool=exiftool_available(), gate=changes.gate(c, cfg.mnt),
+                          **job_view(c))
         finally:
             c.close()
 
@@ -239,6 +247,18 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
         worker.wake()
         return RedirectResponse("/setup?saved=settings", status_code=303)
 
+    @app.post("/setup/changes")
+    def setup_changes(allow_changes: str = Form(""), allow_direct_delete: str = Form(""),
+                      quarantine_days: int = Form(30)):
+        c = conn()
+        try:
+            db.set_settings(c, {"allow_changes": bool(allow_changes),
+                                "allow_direct_delete": bool(allow_changes) and bool(allow_direct_delete),
+                                "quarantine_days": max(0, min(quarantine_days, 3650))})
+        finally:
+            c.close()
+        return RedirectResponse("/setup?saved=changes#changes", status_code=303)
+
     @app.post("/setup/benchmark")
     def setup_benchmark():
         c = conn()
@@ -263,7 +283,7 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
 
     @app.get("/duplicates", response_class=HTMLResponse)
     def duplicates(request: Request, method: str = "exact", category: str = "", q: str = "", min_mb: float = 0,
-                   disk: str = "", group: int = 0, archives: str = "", page: int = 1):
+                   disk: str = "", group: int = 0, archives: str = "", page: int = 1, msg: str = ""):
         method = method if method in queries.METHODS else "exact"
         flt = queries.GroupFilter(method=method, category=category, q=q, min_size=int(min_mb * 1e6), disk=disk,
                                   group=group, archives=bool(archives), page=page)
@@ -280,7 +300,9 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
             return render(request, "duplicates.html", groups=groups, members=members, total=total,
                           wasted=wasted, flt=flt, pages=pages, categories=CATEGORIES, disks=disks, qs=qs,
                           min_mb=min_mb or "", methods=queries.METHODS, counts=counts,
-                          settings=db.get_settings(c))
+                          settings=db.get_settings(c), marked=changes.marked_in_groups(c, [g["id"] for g in groups]),
+                          marks=changes.marks_summary(c), keeper_rules=changes.KEEPER_RULES, msg=msg,
+                          back=str(request.url.path) + ("?" + str(request.url.query) if request.url.query else ""))
         finally:
             c.close()
 
@@ -512,7 +534,7 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
 
     @app.get("/plans/{plan_id}", response_class=HTMLResponse)
     def plan_page(request: Request, plan_id: int, status: str = "", page: int = 1, saved: str = "",
-                  checked: str = ""):
+                  checked: str = "", error: str = ""):
         c = conn()
         try:
             p = plans.get_plan(c, plan_id)
@@ -521,11 +543,15 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
             per_page = 200
             items, total = plans.plan_items(c, plan_id, status, page, per_page)
             folders = plans.plan_folders(c, plan_id)
+            gate = changes.gate(c, cfg.mnt)
+            applied = c.execute("SELECT id, state, created_at FROM actions WHERE plan_id = ? ORDER BY id DESC",
+                                (plan_id,)).fetchall()
         finally:
             c.close()
         pages = max(1, -(-total // per_page))
         return render(request, "plan.html", p=p, items=items, total=total, status=status, page=page, pages=pages,
-                      statuses=plans.STATUS, folders=folders, saved=saved, checked=checked,
+                      statuses=plans.STATUS, folders=folders, saved=saved, checked=checked, error=error,
+                      gate=gate, applied=applied,
                       src_qs=_q_params(**p["source"], template=p["rule"]["template"],
                                        fallback=p["rule"]["fallback"], conflicts=p["rule"]["conflicts"]))
 
@@ -560,6 +586,152 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
             c.close()
         return Response(body, media_type="text/csv", headers={
             "Content-Disposition": f'attachment; filename="deedup-plan-{plan_id}.csv"'})
+
+    # -- changes (milestone 6) -----------------------------------------------------
+
+    def _back(back: str, default: str = "/duplicates") -> str:
+        return back if back.startswith("/") and not back.startswith("//") else default
+
+    @app.post("/marks/group")
+    def marks_group(group_id: int = Form(...), keep: int = Form(...), back: str = Form("")):
+        c = conn()
+        try:
+            n = changes.mark_group(c, group_id, keep)
+        finally:
+            c.close()
+        return RedirectResponse(_with_msg(_back(back), f"{n} marked for removal"), status_code=303)
+
+    @app.post("/marks/group/{group_id}/clear")
+    def marks_group_clear(group_id: int, back: str = Form("")):
+        c = conn()
+        try:
+            changes.unmark_group(c, group_id)
+        finally:
+            c.close()
+        return RedirectResponse(_back(back), status_code=303)
+
+    @app.post("/marks/bulk")
+    def marks_bulk(method: str = Form("exact"), category: str = Form(""), q: str = Form(""), min_mb: float = Form(0),
+                   disk: str = Form(""), rule: str = Form("suggested"), text: str = Form(""), back: str = Form("")):
+        if rule not in changes.KEEPER_RULES or method == "similar":
+            return RedirectResponse(_back(back), status_code=303)
+        flt = queries.GroupFilter(method=method, category=category, q=q, min_size=int(min_mb * 1e6), disk=disk,
+                                  per_page=10**9)
+        c = conn()
+        try:
+            groups, _total, _wasted = queries.list_groups(c, flt)
+            res = changes.mark_groups(c, [g["id"] for g in groups], rule, text.strip())
+        finally:
+            c.close()
+        msg = f"{res['files']:,} copies in {res['groups']:,} groups marked for removal"
+        if res["left"]:
+            msg += f"; {res['left']:,} groups left alone (no copy matched the rule)"
+        return RedirectResponse(_with_msg(_back(back), msg), status_code=303)
+
+    @app.post("/marks/reviewed")
+    def marks_reviewed():
+        c = conn()
+        try:
+            n = changes.mark_reviewed(c, threshold_of(db.get_settings(c)))
+        finally:
+            c.close()
+        return RedirectResponse(_with_msg("/changes", f"{n} photos from Review marked for removal"), status_code=303)
+
+    @app.post("/marks/clear")
+    def marks_clear(file_id: Annotated[list[int] | None, Form()] = None, everything: str = Form("")):
+        c = conn()
+        try:
+            changes.clear_marks(c, None if everything else (file_id or []))
+        finally:
+            c.close()
+        return RedirectResponse("/changes", status_code=303)
+
+    @app.get("/changes", response_class=HTMLResponse)
+    def changes_page(request: Request, page: int = 1, msg: str = "", error: str = ""):
+        per_page = 200
+        c = conn()
+        try:
+            s = db.get_settings(c)
+            summ = changes.marks_summary(c)
+            rows = changes.marked(c, per_page, (max(page, 1) - 1) * per_page)
+            reviewed = len(changes.review_removals(c, threshold_of(s))) if s["similar_matching"] else 0
+            return render(request, "changes.html", gate=changes.gate(c, cfg.mnt), summ=summ, rows=rows,
+                          page=page, pages=max(1, -(-summ["files"] // per_page)), reviewed=reviewed,
+                          actions=changes.list_actions(c), modes=changes.MODES, msg=msg, error=error, **job_view(c))
+        finally:
+            c.close()
+
+    @app.post("/changes/remove")
+    def changes_remove(mode: str = Form("quarantine"), confirm: str = Form("")):
+        if mode == "delete" and confirm.strip().lower() != "delete":
+            return RedirectResponse(_with_msg("/changes", "Type DELETE to confirm a permanent delete", "error"),
+                                    status_code=303)
+        c = conn()
+        try:
+            aid = changes.create_removal(c, cfg.mnt, mode)
+        except changes.ChangeError as e:
+            return RedirectResponse(_with_msg("/changes", str(e), "error"), status_code=303)
+        finally:
+            c.close()
+        worker.wake()
+        return RedirectResponse(f"/changes/{aid}", status_code=303)
+
+    @app.get("/changes/{action_id}", response_class=HTMLResponse)
+    def change_page(request: Request, action_id: int, status: str = "", page: int = 1, msg: str = "",
+                    error: str = ""):
+        c = conn()
+        try:
+            a = changes.get_action(c, action_id)
+            if a is None:
+                return Response("No such change", status_code=404)
+            per_page = 200
+            items, total, counts = changes.action_items(c, action_id, status, page, per_page)
+            return render(request, "change.html", a=a, items=items, total=total, counts=counts, status=status,
+                          page=page, pages=max(1, -(-total // per_page)), statuses=changes.ITEM_STATUS,
+                          modes=changes.MODES, gate=changes.gate(c, cfg.mnt), msg=msg, error=error, **job_view(c))
+        finally:
+            c.close()
+
+    @app.post("/changes/{action_id}/undo")
+    def change_undo(action_id: int):
+        c = conn()
+        try:
+            changes.request_undo(c, cfg.mnt, action_id)
+        except changes.ChangeError as e:
+            return RedirectResponse(_with_msg(f"/changes/{action_id}", str(e), "error"), status_code=303)
+        finally:
+            c.close()
+        worker.wake()
+        return RedirectResponse(_with_msg(f"/changes/{action_id}", "Undo started"), status_code=303)
+
+    @app.post("/changes/{action_id}/purge")
+    def change_purge(action_id: int, confirm: str = Form("")):
+        if not confirm:
+            return RedirectResponse(_with_msg(f"/changes/{action_id}", "Tick the box to confirm", "error"),
+                                    status_code=303)
+        c = conn()
+        try:
+            changes.request_purge(c, cfg.mnt, action_id)
+        except changes.ChangeError as e:
+            return RedirectResponse(_with_msg(f"/changes/{action_id}", str(e), "error"), status_code=303)
+        finally:
+            c.close()
+        worker.wake()
+        return RedirectResponse(_with_msg(f"/changes/{action_id}", "Emptying the quarantine"), status_code=303)
+
+    @app.post("/plans/{plan_id}/apply")
+    def plan_apply(plan_id: int, confirm: str = Form("")):
+        if not confirm:
+            return RedirectResponse(f"/plans/{plan_id}?error=" + _q("Tick the box to confirm"), status_code=303)
+        c = conn()
+        try:
+            aid = changes.create_move(c, cfg.mnt, plan_id)
+        except changes.ChangeError as e:
+            return RedirectResponse(f"/plans/{plan_id}?error=" + _q(str(e)), status_code=303)
+        finally:
+            c.close()
+        worker.wake()
+        return RedirectResponse(f"/changes/{aid}", status_code=303)
 
     @app.get("/same-path", response_class=HTMLResponse)
     def same_path(request: Request):
@@ -663,6 +835,12 @@ def _q(s: str) -> str:
     from urllib.parse import quote_plus
 
     return quote_plus(s)
+
+
+def _with_msg(url: str, text: str, key: str = "msg") -> str:
+    base, _, frag = url.partition("#")
+    sep = "&" if "?" in base else "?"
+    return f"{base}{sep}{key}={_q(text)}" + (f"#{frag}" if frag else "")
 
 
 def _q_params(**kw) -> str:

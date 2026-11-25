@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block title %}Changes · deedup{% endblock %}
+{% block content %}
+{% if msg %}<p class="flash ok">{{ msg }}</p>{% endif %}
+{% if error %}<p class="flash err">{{ error }}</p>{% endif %}
+
+{% if not gate.open %}
+<section class="card callout">
+  <h2>Changes are off</h2>
+  <p>deedup only reads your disks right now.
+    {% if not gate.allowed %}Turn on <strong>Allow changes</strong> on the <a href="/setup#changes">Setup</a> screen.{% endif %}
+    {% if not gate.writable %}The container sees <span class="mono">/mnt</span> read-only: edit the container and set the
+      <span class="mono">/mnt</span> path to read/write.{% endif %}
+    You can still mark copies for removal below; nothing happens until you confirm.</p>
+</section>
+{% endif %}
+
+{% if active %}<section class="card">{% include "_status.html" %}</section>{% endif %}
+
+{% if summ.files %}
+<section class="card {{ 'callout' if gate.open }}">
+  <h2>Confirm</h2>
+  <form method="post" action="/changes/remove">
+    <div class="modes">
+      {% for k, v in modes.items() if k != "delete" or gate.direct_delete %}
+      <label class="radio"><input type="radio" name="mode" value="{{ k }}" {{ "checked" if k == "quarantine" }}
+        {% if k == "delete" %}onchange="document.getElementById('confirm-delete').hidden = !this.checked"{% else %}onchange="document.getElementById('confirm-delete').hidden = true"{% endif %}> {{ v }}</label>
+      {% endfor %}
+    </div>
+    <p id="confirm-delete" hidden><label>Type <strong>DELETE</strong> to confirm <input type="text" name="confirm" autocomplete="off" size="10"></label></p>
+    <p class="muted small">Just before each file, deedup checks it and its kept copy again: both unchanged since the scan, the kept copy
+      still there and not the same file, and for exact copies both are read and hashed again. Anything that fails is skipped.
+      {% if gate.quarantine_days %}Quarantined files are deleted after {{ gate.quarantine_days }} days.{% else %}Quarantined files stay until you empty the quarantine.{% endif %}</p>
+    <button {{ "disabled" if not gate.open or active }}>Remove {{ "{:,}".format(summ.files) }} {{ "copy" if summ.files == 1 else "copies" }} ({{ summ.bytes | bytes }})</button>
+    {% if active %}<span class="muted small">Wait for the current job to finish.</span>{% endif %}
+  </form>
+</section>
+{% endif %}
+
+<section class="card">
+  <div class="row between">
+    <h2 style="margin:0">Marked for removal</h2>
+    {% if summ.files %}<form method="post" action="/marks/clear"><input type="hidden" name="everything" value="1"><button class="secondary small">Clear all marks</button></form>{% endif %}
+  </div>
+  {% if summ.files %}
+  <p><strong>{{ "{:,}".format(summ.files) }}</strong> {{ "copy" if summ.files == 1 else "copies" }}, <strong>{{ summ.bytes | bytes }}</strong>.
+    <span class="muted small">{% if summ.exact %}{{ "{:,}".format(summ.exact) }} exact copies{% endif %}{% if summ.image %}{{ ", " if summ.exact }}{{ "{:,}".format(summ.image) }} same photo with other metadata{% endif %}{% if summ.similar %}{{ ", " if summ.exact or summ.image }}{{ "{:,}".format(summ.similar) }} similar photos from Review{% endif %}.
+    Each one has a copy that is kept, shown under it.</span></p>
+  {% else %}
+  <p class="muted">Nothing is marked. Choose the copy to keep in <a href="/duplicates">Duplicates</a>, or decide pairs in <a href="/review">Review</a>.</p>
+  {% endif %}
+  {% if reviewed %}
+  <form method="post" action="/marks/reviewed" class="row">
+    <span class="small">{{ "{:,}".format(reviewed) }} similar {{ "photo" if reviewed == 1 else "photos" }} you chose not to keep in Review.</span>
+    <button class="secondary small">Mark them for removal</button>
+  </form>
+  {% endif %}
+  {% if rows %}
+  <table class="members changes-list" style="margin-top:10px">
+    <thead><tr><th>Remove</th><th class="num">Size</th><th></th></tr></thead>
+    {% for r in rows %}
+    <tr>
+      <td><div class="path" title="{{ r.path }}"><a href="/file/{{ r.file_id }}">{{ r.user }}</a> <span class="muted small">{{ r.disk }}</span></div>
+        <div class="path muted small col-keep" title="{{ r.keep_path }}">keeps <a href="/file/{{ r.keep_id }}">{{ r.keep_user }}</a> · {{ r.keep_disk }}
+          · {{ {"exact": "exact copy", "image": "same photo", "similar": "similar photo"}[r.method] }}</div>
+        {% if not r.ok %}<span class="pill warn">changed since: will be skipped</span>{% endif %}</td>
+      <td class="num">{{ r.size | bytes }}</td>
+      <td><form method="post" action="/marks/clear"><input type="hidden" name="file_id" value="{{ r.file_id }}"><button class="secondary small">Keep</button></form></td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% if pages > 1 %}
+  <nav class="pager">
+    {% if page > 1 %}<a href="/changes?page={{ page - 1 }}">← Previous</a>{% endif %}
+    <span>Page {{ page }} of {{ pages }}</span>
+    {% if page < pages %}<a href="/changes?page={{ page + 1 }}">Next →</a>{% endif %}
+  </nav>
+  {% endif %}
+  {% endif %}
+</section>
+
+
+<section class="card">
+  <h2>History</h2>
+  {% if actions %}
+  <table>
+    <thead><tr><th>Change</th><th>State</th><th class="num hide-phone">Done</th><th class="hide-phone">In quarantine</th><th class="col-mtime">When</th></tr></thead>
+    {% for a in actions %}
+    <tr>
+      <td><a href="/changes/{{ a.id }}">{{ a.label }}</a><div class="muted small">{{ modes.get(a.mode, "Move files") if a.kind == "remove" else "Move files" }}</div></td>
+      <td><span class="pill {{ 'ok' if a.state == 'done' else 'warn' if a.state in ('failed', 'stopped') else '' }}">{{ a.state }}</span>{% if a.busy %} <span class="pill">working</span>{% endif %}</td>
+      <td class="num hide-phone">{{ "{:,}".format(a.counts.get("done", 0) + a.counts.get("purged", 0)) }} of {{ "{:,}".format(a.total) }}</td>
+      <td class="small hide-phone">{% if a.quarantined %}{{ "{:,}".format(a.quarantined) }} files, {{ a.quarantined_bytes | bytes }}{% elif a.purged_at %}<span class="muted">emptied</span>{% else %}<span class="muted">none</span>{% endif %}</td>
+      <td class="muted small col-mtime">{{ a.created_at | time }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}<p class="muted">No changes yet.</p>{% endif %}
+</section>
+{% endblock %}

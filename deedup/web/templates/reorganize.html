@@ -11,7 +11,7 @@
 {% else %}
 <section class="card">
   <p style="margin-top:0">Pick a rule and see where every file would go. <strong>This is a preview:</strong> nothing is moved.
-    A saved plan can be applied in milestone 6, after you confirm it there.</p>
+    Save the plan, then apply it from the plan's page after you confirm it there.</p>
   <form method="get" action="/reorganize" class="plan-form">
     {% for k, v in source.items() if k not in ("loc", "dir") and v %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
     <div class="row">

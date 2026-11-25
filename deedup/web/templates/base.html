@@ -27,10 +27,12 @@
     <a href="/browse" class="{{ 'on' if nav in ('browse', 'file') }}">Browse</a>
     <a href="/plans" class="{{ 'on' if nav in ('reorganize', 'plans', 'plan') }}">Plans</a>
     <a href="/archives" class="{{ 'on' if nav in ('archives', 'archive') }}">Archives</a>
+    <a href="/changes" class="{{ 'on' if nav in ('changes', 'change') }}">Changes</a>
     <a href="/same-path" class="{{ 'on' if nav == 'same_path' }}">Checks</a>
     <a href="/setup" class="{{ 'on' if nav == 'setup' }}">Setup</a>
   </nav>
-  <span class="ro" title="deedup is report-only for now: the container mounts /mnt read-only and never changes your files.">read-only</span>
+  {% if gate and gate.open %}<a class="ro on" href="/changes" title="Changes are allowed. Nothing is changed until you confirm it on the Changes screen.">changes allowed</a>
+  {% else %}<span class="ro" title="deedup only reads your files: {{ 'changes are turned off in Setup' if not (gate and gate.allowed) else '/mnt is mounted read-only' }}.">read-only</span>{% endif %}
   <div class="theme" role="group" aria-label="Theme">
     <button type="button" data-theme-choice="system" title="Follow the system setting" aria-label="System theme">
       <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg></button>

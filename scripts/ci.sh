@@ -39,7 +39,7 @@ smoke() {
   # An empty, read-only /mnt is enough to start the app and render every page.
   docker run -d --name "$name" --tmpfs /mnt:ro,size=1m "$IMAGE" >/dev/null
   local probe='import urllib.request as u
-for p in ("/healthz", "/", "/setup", "/duplicates", "/browse", "/review", "/archives", "/reorganize", "/plans", "/same-path"):
+for p in ("/healthz", "/", "/setup", "/duplicates", "/browse", "/review", "/archives", "/reorganize", "/plans", "/changes", "/same-path"):
     r = u.urlopen("http://127.0.0.1:8080" + p, timeout=4)
     assert r.status == 200, p
     print("  ok", p)'
