@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+{% block title %}Setup · deedup{% endblock %}
+{% block content %}
+{% if error %}<div class="flash err">{{ error }}</div>{% endif %}
+{% if saved %}<div class="flash ok">Saved.</div>{% endif %}
+
+<section class="card">
+  <h2>Shares to scan</h2>
+  <p class="muted">deedup reads each share straight from the disks that hold it (never through <code>/mnt/user</code>),
+  so every file knows its disk and disks can be read one at a time. Shares such as <code>appdata</code>,
+  <code>system</code> and <code>domains</code> are usually best left unticked.</p>
+  {% if shares %}
+  <form method="post" action="/setup/shares">
+    <table>
+      <thead><tr><th></th><th>Share</th><th>On disks</th><th class="num">Files indexed</th></tr></thead>
+      {% for s in shares %}
+      <tr>
+        <td><input type="checkbox" name="share" value="{{ s.name }}" id="share-{{ loop.index }}" {{ "checked" if s.name in settings.shares }}></td>
+        <td><label for="share-{{ loop.index }}">{{ s.name }}</label> <span class="muted small">{{ s.user_path }}</span></td>
+        <td class="small">{{ s.disks | join(", ") or "—" }}</td>
+        <td class="num">
+          {% set ns = namespace(n=0) %}
+          {% for r in roots if r.share == s.name and r.enabled %}{% set ns.n = ns.n + root_counts.get(r.id, 0) %}{% endfor %}
+          {{ "{:,}".format(ns.n) if ns.n else "" }}
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+    <button>Save share selection</button>
+  </form>
+  {% else %}
+  <p>No shares found under <code>{{ mnt }}</code>. Check that the container maps the host's <code>/mnt</code> to <code>{{ mnt }}</code>.</p>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>Other folders</h2>
+  <p class="muted">Add a folder that is not an Unraid share, for example on an unassigned device. It must be inside <code>{{ mnt }}</code>.</p>
+  <form method="post" action="/setup/custom" class="row">
+    <input type="text" name="path" placeholder="/mnt/disks/usb-backup/Old laptop" size="50" required>
+    <button>Add folder</button>
+  </form>
+  {% set custom = roots | selectattr("source", "equalto", "custom") | list %}
+  {% if custom %}
+  <table>
+    <thead><tr><th>Folder</th><th>Disk</th><th class="num">Files indexed</th><th></th></tr></thead>
+    {% for r in custom %}
+    <tr><td>{{ r.path }}</td><td>{{ r.disk }}</td><td class="num">{{ "{:,}".format(root_counts.get(r.id, 0)) }}</td>
+      <td><form method="post" action="/setup/root/{{ r.id }}/remove"><button class="secondary small">Remove</button></form></td></tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>Disks and pools</h2>
+  <table>
+    <thead><tr><th>Name</th><th>Type</th><th>Path</th><th class="num">Used</th><th class="num">Size</th><th class="num">Files indexed</th></tr></thead>
+    {% for d in disks %}
+    <tr><td>{{ d.name }}</td><td class="muted">{{ d.kind }}</td><td class="small">{{ d.path }}</td>
+      <td class="num">{{ d.used | bytes }}</td><td class="num">{{ d.total | bytes }}</td>
+      <td class="num">{{ "{:,}".format(disk_files.get(d.name, 0)) if disk_files.get(d.name) else "" }}</td></tr>
+    {% endfor %}
+  </table>
+</section>
+
+<form method="post" action="/setup/settings">
+<section class="card">
+  <h2>Scan settings</h2>
+  <div class="grid2">
+    <label>Exclusions <span class="muted small">one pattern per line, matched against names and share-relative paths (* and ? work)</span>
+      <textarea name="exclusions" rows="6">{{ settings.exclusions | join("\n") }}</textarea></label>
+    <label>Takeout and archive folders <span class="muted small">one path per line; recorded now, used from milestone 3</span>
+      <textarea name="takeout_paths" rows="6">{{ settings.takeout_paths | join("\n") }}</textarea></label>
+  </div>
+  <label>Ignore files smaller than <input type="number" name="min_size" min="1" value="{{ settings.min_size }}"> bytes</label>
+</section>
+
+<section class="card" id="disk-mode">
+  <h2>Disk mode</h2>
+  <label class="radio"><input type="radio" name="disk_mode" value="single" {{ "checked" if settings.disk_mode == "single" }}>
+    One disk at a time <span class="muted small">(default: only one array disk spins and works at once)</span></label>
+  <label class="radio"><input type="radio" name="disk_mode" value="parallel" {{ "checked" if settings.disk_mode == "parallel" }}>
+    Parallel: read up to <input type="number" name="parallel_disks" min="2" max="32" value="{{ settings.parallel_disks }}"> disks at once</label>
+  <label>Hash threads per large file <input type="number" name="hash_threads" min="1" max="64" value="{{ settings.hash_threads }}">
+    <span class="muted small">1 suits spinning disks; more helps only on fast SSDs</span></label>
+</section>
+
+<section class="card">
+  <h2>Schedule</h2>
+  <label class="radio"><input type="checkbox" name="schedule_enabled" value="1" {{ "checked" if settings.schedule_enabled }}>
+    Scan every day from <input type="time" name="schedule_start" value="{{ settings.schedule_start }}">
+    to <input type="time" name="schedule_end" value="{{ settings.schedule_end }}"></label>
+  <p class="muted small">A scheduled scan stops at the end time and picks up where it left off the next night. Scans you start yourself are not stopped.</p>
+  <button>Save settings</button>
+</section>
+</form>
+
+<section class="card" id="benchmark">
+  <h2>Benchmark</h2>
+  <p class="muted">Reads a sample of large files from each selected disk alone, then from 2, 3, … disks at once, and measures
+  hashing speed. It proposes a disk mode; nothing changes until you apply it. Takes about {{ 10 }} seconds per disk and combination.</p>
+  {% if active and active.type == "benchmark" %}
+    {% include "_status.html" %}
+  {% else %}
+    <form method="post" action="/setup/benchmark"><button {{ "disabled" if active }}>Run benchmark</button></form>
+    {% if active %}<p class="muted small">Wait for the current scan to finish first.</p>{% endif %}
+  {% endif %}
+  {% if bench %}
+  <h3>Last result <span class="muted small">{{ bench.created_at | time }}</span></h3>
+  <p>{{ bench.note }}</p>
+  <div class="cols">
+    <table>
+      <thead><tr><th>Disk alone</th><th class="num">MB/s</th></tr></thead>
+      {% for s in bench.solo %}<tr><td>{{ s.disk }}</td><td class="num">{{ s.mbps }}</td></tr>{% endfor %}
+      {% for s in bench.skipped %}<tr><td>{{ s.disk }}</td><td class="muted small">{{ s.reason }}</td></tr>{% endfor %}
+    </table>
+    <table>
+      <thead><tr><th>Disks together</th><th class="num">MB/s</th><th class="num">Sum alone</th><th class="num">Efficiency</th></tr></thead>
+      {% for c in bench.combos %}
+      <tr><td>{{ c.disks | length }} ({{ c.disks | join(", ") }})</td><td class="num">{{ c.aggregate_mbps }}</td>
+        <td class="num">{{ c.sum_of_solo_mbps }}</td><td class="num">{{ (c.efficiency * 100) | round | int }}%</td></tr>
+      {% else %}<tr><td colspan="4" class="muted">Only one disk measured.</td></tr>{% endfor %}
+    </table>
+  </div>
+  <p class="small">CPU: {{ bench.cpus }} cores, BLAKE3 {{ bench.hash_mbps_1_thread }} MB/s on one thread, {{ bench.hash_mbps_all_threads }} MB/s on all.</p>
+  <p><strong>Proposal:</strong>
+    {% if bench.proposal.disk_mode == "parallel" %}parallel, {{ bench.proposal.parallel_disks }} disks at once{% else %}one disk at a time{% endif %},
+    {{ bench.proposal.hash_threads }} hash thread{{ "s" if bench.proposal.hash_threads > 1 }} per file.</p>
+  <form method="post" action="/setup/benchmark/apply"><button>Apply proposal</button></form>
+  {% endif %}
+</section>
+{% endblock %}

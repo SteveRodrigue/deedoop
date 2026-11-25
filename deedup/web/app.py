@@ -1,0 +1,355 @@
+"""FastAPI web UI. Server-rendered Jinja pages with htmx for live updates.
+
+The UI never reads or writes the user's files. It reads the index, queues
+jobs for the worker and changes settings.
+"""
+
+from __future__ import annotations
+
+import base64
+import datetime as dt
+import json
+import secrets
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+from fastapi import FastAPI, Form, Request
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+
+from .. import __version__, db, queries
+from ..categories import CATEGORIES
+from ..config import AppConfig
+from ..config import load as load_config
+from ..discovery import RootError, add_custom_root, list_disks, list_shares, remove_root, sync_share_roots
+from ..worker import Worker
+
+HERE = Path(__file__).parent
+
+
+def human_bytes(n: float | None) -> str:
+    n = float(n or 0)
+    for unit in ("B", "KB", "MB", "GB", "TB", "PB"):
+        if abs(n) < 1000 or unit == "PB":
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1000
+    return f"{n:.1f} PB"
+
+
+def fmt_time(ts: float | None) -> str:
+    if not ts:
+        return "never"
+    return dt.datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
+
+
+def fmt_duration(seconds: float) -> str:
+    s = int(seconds)
+    h, rem = divmod(s, 3600)
+    m, s = divmod(rem, 60)
+    return f"{h}h {m:02d}m" if h else f"{m}m {s:02d}s"
+
+
+def _lines(text: str) -> list[str]:
+    return [line.strip() for line in text.splitlines() if line.strip()]
+
+
+def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start_worker: bool = True) -> FastAPI:
+    cfg = cfg or load_config()
+    db.init(cfg.db_path)
+    worker = worker or Worker(cfg)
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        if start_worker:
+            worker.start()
+        yield
+        if start_worker:
+            worker.shutdown()
+
+    app = FastAPI(title="deedup", version=__version__, lifespan=lifespan, docs_url=None, redoc_url=None)
+    app.state.cfg = cfg
+    app.state.worker = worker
+    app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
+    templates = Jinja2Templates(directory=HERE / "templates")
+    templates.env.filters["bytes"] = human_bytes
+    templates.env.filters["time"] = fmt_time
+    templates.env.globals["version"] = __version__
+
+    if cfg.password:
+        expected = "Basic " + base64.b64encode(f"deedup:{cfg.password}".encode()).decode()
+
+        @app.middleware("http")
+        async def basic_auth(request: Request, call_next):
+            if request.url.path == "/healthz":
+                return await call_next(request)
+            got = request.headers.get("authorization", "")
+            if not secrets.compare_digest(got.encode(), expected.encode()):
+                return Response("Authentication required", status_code=401,
+                                headers={"WWW-Authenticate": 'Basic realm="deedup"'})
+            return await call_next(request)
+
+    def conn():
+        return db.connect(cfg.db_path)
+
+    def render(request: Request, name: str, **ctx) -> HTMLResponse:
+        return templates.TemplateResponse(request, name, {"nav": name.split(".")[0], **ctx})
+
+    def job_view(c) -> dict:
+        active = db.active_job(c)
+        last = c.execute(
+            "SELECT * FROM jobs WHERE state NOT IN ('queued', 'running') AND type = 'scan' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        live = worker.status.snapshot() if worker.current_job else {}
+        elapsed = fmt_duration(dt.datetime.now().timestamp() - live["started"]) if live.get("started") else ""
+        return {
+            "active": dict(active) if active else None,
+            "last": dict(last) if last else None,
+            "last_progress": json.loads(last["progress"]) if last else {},
+            "live": live,
+            "elapsed": elapsed,
+            "paused": worker.control.paused if worker.current_job else False,
+        }
+
+    # -- pages ----------------------------------------------------------------
+
+    @app.get("/", response_class=HTMLResponse)
+    def dashboard(request: Request):
+        c = conn()
+        try:
+            stats = queries.index_stats(c, cfg.db_path)
+            roots = c.execute("SELECT COUNT(*) FROM roots WHERE enabled = 1").fetchone()[0]
+            return render(request, "dashboard.html", stats=stats, roots=roots,
+                          by_cat=queries.wasted_by_category(c), disks=queries.per_disk(c),
+                          settings=db.get_settings(c), **job_view(c))
+        finally:
+            c.close()
+
+    @app.get("/partials/status", response_class=HTMLResponse)
+    def status_partial(request: Request):
+        c = conn()
+        try:
+            return templates.TemplateResponse(request, "_status.html", {**job_view(c), "settings": db.get_settings(c)})
+        finally:
+            c.close()
+
+    @app.get("/setup", response_class=HTMLResponse)
+    def setup(request: Request, error: str = "", saved: str = ""):
+        c = conn()
+        try:
+            disks = list_disks(cfg.mnt)
+            shares = list_shares(cfg.mnt, disks)
+            settings = db.get_settings(c)
+            roots = c.execute("SELECT * FROM roots ORDER BY source, path").fetchall()
+            bench = c.execute("SELECT * FROM benchmarks ORDER BY id DESC LIMIT 1").fetchone()
+            disk_files = {r["disk"]: r["files"] for r in queries.per_disk(c)}
+            return render(request, "setup.html", disks=disks, shares=shares, settings=settings,
+                          roots=roots, root_counts=queries.root_counts(c), disk_files=disk_files,
+                          bench=json.loads(bench["result"]) if bench else None, error=error, saved=saved,
+                          mnt=str(cfg.mnt), **job_view(c))
+        finally:
+            c.close()
+
+    @app.post("/setup/shares")
+    async def setup_shares(request: Request):
+        form = await request.form()
+        selected = sorted(set(form.getlist("share")))
+        c = conn()
+        try:
+            db.set_settings(c, {"shares": selected})
+            sync_share_roots(c, cfg.mnt)
+        finally:
+            c.close()
+        return RedirectResponse("/setup?saved=shares", status_code=303)
+
+    @app.post("/setup/custom")
+    def setup_custom(path: str = Form(...)):
+        c = conn()
+        try:
+            add_custom_root(c, cfg.mnt, path)
+        except RootError as e:
+            return RedirectResponse(f"/setup?error={_q(str(e))}", status_code=303)
+        finally:
+            c.close()
+        return RedirectResponse("/setup?saved=folder", status_code=303)
+
+    @app.post("/setup/root/{root_id}/remove")
+    def setup_remove_root(root_id: int):
+        c = conn()
+        try:
+            row = c.execute("SELECT * FROM roots WHERE id = ?", (root_id,)).fetchone()
+            if row and row["source"] == "share":
+                s = db.get_settings(c)
+                db.set_settings(c, {"shares": [x for x in s["shares"] if x != row["share"]]})
+            remove_root(c, root_id)
+        finally:
+            c.close()
+        return RedirectResponse("/setup?saved=removed", status_code=303)
+
+    @app.post("/setup/settings")
+    def setup_settings(
+        exclusions: str = Form(""),
+        takeout_paths: str = Form(""),
+        min_size: int = Form(1),
+        disk_mode: str = Form("single"),
+        parallel_disks: int = Form(2),
+        hash_threads: int = Form(1),
+        schedule_enabled: str = Form(""),
+        schedule_start: str = Form("01:00"),
+        schedule_end: str = Form("07:00"),
+    ):
+        if disk_mode not in ("single", "parallel"):
+            return RedirectResponse("/setup?error=Unknown+disk+mode", status_code=303)
+        try:
+            dt.datetime.strptime(schedule_start, "%H:%M")
+            dt.datetime.strptime(schedule_end, "%H:%M")
+        except ValueError:
+            return RedirectResponse("/setup?error=Times+must+look+like+01:00", status_code=303)
+        c = conn()
+        try:
+            db.set_settings(c, {
+                "exclusions": _lines(exclusions),
+                "takeout_paths": _lines(takeout_paths),
+                "min_size": max(1, min_size),
+                "disk_mode": disk_mode,
+                "parallel_disks": max(2, min(parallel_disks, 32)),
+                "hash_threads": max(1, min(hash_threads, 64)),
+                "schedule_enabled": bool(schedule_enabled),
+                "schedule_start": schedule_start,
+                "schedule_end": schedule_end,
+            })
+        finally:
+            c.close()
+        worker.wake()
+        return RedirectResponse("/setup?saved=settings", status_code=303)
+
+    @app.post("/setup/benchmark")
+    def setup_benchmark():
+        c = conn()
+        try:
+            if db.active_job(c) is None:
+                db.enqueue_job(c, "benchmark")
+        finally:
+            c.close()
+        worker.wake()
+        return RedirectResponse("/setup#benchmark", status_code=303)
+
+    @app.post("/setup/benchmark/apply")
+    def setup_benchmark_apply():
+        c = conn()
+        try:
+            bench = c.execute("SELECT result FROM benchmarks ORDER BY id DESC LIMIT 1").fetchone()
+            if bench:
+                db.set_settings(c, json.loads(bench["result"])["proposal"])
+        finally:
+            c.close()
+        return RedirectResponse("/setup?saved=benchmark#benchmark", status_code=303)
+
+    @app.get("/duplicates", response_class=HTMLResponse)
+    def duplicates(request: Request, category: str = "", q: str = "", min_mb: float = 0, disk: str = "",
+                   page: int = 1):
+        flt = queries.GroupFilter(category=category, q=q, min_size=int(min_mb * 1e6), disk=disk, page=page)
+        c = conn()
+        try:
+            groups, total, wasted = queries.list_groups(c, flt)
+            members = queries.group_members(c, [g["id"] for g in groups])
+            disks = [r["disk"] for r in queries.per_disk(c)]
+            pages = max(1, -(-total // flt.per_page))
+            qs = _q_params(category=category, q=q, min_mb=min_mb or "", disk=disk)
+            return render(request, "duplicates.html", groups=groups, members=members, total=total,
+                          wasted=wasted, flt=flt, pages=pages, categories=CATEGORIES, disks=disks, qs=qs,
+                          min_mb=min_mb or "")
+        finally:
+            c.close()
+
+    @app.get("/same-path", response_class=HTMLResponse)
+    def same_path(request: Request):
+        c = conn()
+        try:
+            return render(request, "same_path.html", rows=queries.same_path_on_two_disks(c),
+                          errors=queries.file_errors(c))
+        finally:
+            c.close()
+
+    @app.get("/export/duplicates.{fmt}")
+    def export(fmt: str, category: str = "", q: str = "", min_mb: float = 0, disk: str = ""):
+        flt = queries.GroupFilter(category=category, q=q, min_size=int(min_mb * 1e6), disk=disk)
+        if fmt not in ("csv", "json"):
+            return Response(status_code=404)
+        c = conn()
+
+        def gen():
+            try:
+                yield from (queries.export_csv(c, flt) if fmt == "csv" else queries.export_json(c, flt))
+            finally:
+                c.close()
+
+        stamp = dt.datetime.now().strftime("%Y%m%d-%H%M")
+        media = "text/csv" if fmt == "csv" else "application/json"
+        return StreamingResponse(gen(), media_type=media, headers={
+            "Content-Disposition": f'attachment; filename="deedup-duplicates-{stamp}.{fmt}"'})
+
+    # -- scan controls ----------------------------------------------------------
+
+    @app.post("/scan/start")
+    def scan_start():
+        c = conn()
+        try:
+            if db.active_job(c) is None:
+                db.enqueue_job(c, "scan")
+        finally:
+            c.close()
+        worker.wake()
+        return RedirectResponse("/", status_code=303)
+
+    @app.post("/scan/pause")
+    def scan_pause():
+        worker.pause()
+        return RedirectResponse("/", status_code=303)
+
+    @app.post("/scan/resume")
+    def scan_resume():
+        worker.resume()
+        return RedirectResponse("/", status_code=303)
+
+    @app.post("/scan/stop")
+    def scan_stop():
+        c = conn()
+        try:
+            # A job still waiting in the queue is simply cancelled.
+            c.execute("UPDATE jobs SET state = 'stopped', finished_at = strftime('%s','now') "
+                      "WHERE state = 'queued'")
+        finally:
+            c.close()
+        worker.stop()
+        return RedirectResponse("/", status_code=303)
+
+    # -- API ------------------------------------------------------------------
+
+    @app.get("/api/status")
+    def api_status():
+        c = conn()
+        try:
+            v = job_view(c)
+            return JSONResponse({"version": __version__, "stats": queries.index_stats(c, cfg.db_path),
+                                 "active": v["active"], "live": v["live"], "paused": v["paused"]})
+        finally:
+            c.close()
+
+    @app.get("/healthz")
+    def healthz():
+        return {"ok": True}
+
+    return app
+
+
+def _q(s: str) -> str:
+    from urllib.parse import quote_plus
+
+    return quote_plus(s)
+
+
+def _q_params(**kw) -> str:
+    from urllib.parse import urlencode
+
+    return urlencode({k: v for k, v in kw.items() if v not in ("", None, 0)})

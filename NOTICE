@@ -1,0 +1,15 @@
+deedup
+Copyright 2026 Steve Rodrigue
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+Ideas borrowed, with thanks (no code copied):
+  - File Hunter (https://github.com/zen-logic/file-hunter), MIT licence:
+    partial-hash tiering (first and last 64 KB before a full hash) and
+    diff-based incremental rescans.
+  - fclones (https://github.com/pkolaczk/fclones), MIT licence:
+    size, then prefix, then full-hash grouping.
+
+Bundled third-party software:
+  - htmx 2.0.4 (https://htmx.org), Zero-Clause BSD licence,
+    in deedup/web/static/htmx.min.js.
