@@ -14,7 +14,7 @@ import threading
 import time
 import traceback
 
-from . import db
+from . import changes, db
 from .benchmark import BenchConfig, disk_paths_for_benchmark, run_benchmark
 from .config import AppConfig
 from .control import Control, Status, Stopped
@@ -91,6 +91,7 @@ class Worker:
         while not self._quit.is_set():
             try:
                 self._check_schedule()
+                self._check_purges()
                 ran = self._run_next()
             except Exception:  # never let the worker die
                 log.exception("worker loop error")
@@ -98,6 +99,20 @@ class Worker:
             if not ran:
                 self._wake.wait(15)
                 self._wake.clear()
+
+    _last_purge_check = 0.0
+
+    def _check_purges(self) -> None:
+        """Hourly: queue the deletion of quarantines older than the setting."""
+        if time.time() - self._last_purge_check < 3600:
+            return
+        self._last_purge_check = time.time()
+        conn = db.connect(self.cfg.db_path)
+        try:
+            if changes.gate(conn, self.cfg.mnt)["open"]:
+                changes.enqueue_due_purges(conn, int(db.get_settings(conn)["quarantine_days"] or 0))
+        finally:
+            conn.close()
 
     def _check_schedule(self) -> None:
         conn = db.connect(self.cfg.db_path)
@@ -144,6 +159,11 @@ class Worker:
                                                   self.control, self.status))
                 elif job["type"] == "benchmark":
                     result = self._benchmark(conn)
+                elif job["type"] in ("action", "undo", "purge"):
+                    run = {"action": changes.run_action, "undo": changes.run_undo,
+                           "purge": changes.run_purge}[job["type"]]
+                    result = run(changes.RunContext(self.cfg.db_path, self.cfg.mnt, params["action_id"],
+                                                    self.control, self.status))
                 else:
                     raise ValueError(f"unknown job type {job['type']}")
             except Stopped as e:

@@ -27,7 +27,7 @@
 <section class="card">
   <div class="row between">
     <p style="margin:0">Photos that look the same but whose image data differs: recompressed or resized copies, such as Google
-      “Storage saver”, or exports from an editor. Your decisions are only recorded; nothing is moved or deleted.</p>
+      “Storage saver”, or exports from an editor. Your decisions are only recorded; removing the copies you did not keep is confirmed on the <a href="/changes">Changes</a> screen.</p>
   </div>
   <form method="post" action="/review/threshold" class="row filters" style="margin-top:10px">
     <input type="hidden" name="view" value="{{ view }}">
@@ -61,8 +61,8 @@
       <button name="decision" value="not_dup" data-key="n" class="danger">Not the same photo<kbd>N</kbd></button>
       <button name="decision" value="later" data-key="s" class="secondary">Decide later<kbd>S</kbd></button>
     </form>
-    <p class="muted small" style="margin-bottom:0">“Keep” marks the other copy for removal in milestone 6, after you confirm there.
-      “Not the same photo” hides this pair for good.</p>
+    <p class="muted small" style="margin-bottom:0">“Keep” records your choice; the other copy can then be removed from the
+      <a href="/changes">Changes</a> screen, after you confirm there. “Not the same photo” hides this pair for good.</p>
     {% if pairs | length > 1 %}<div hidden>{% for p in (pairs[1].a, pairs[1].b) %}{% if p.thumb %}<img src="/thumb/{{ p.id }}?s=640" alt="" loading="eager">{% endif %}{% endfor %}</div>{% endif %}
   </section>
   {% else %}

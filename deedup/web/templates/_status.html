@@ -2,10 +2,11 @@
 <div id="status" {% if active %}hx-get="/partials/status" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>
 {% if active %}
   {% set phase_names = {"starting": "Starting", "walk": "Walking folders", "archives": "Opening archives", "sidecars": "Reading Takeout JSON", "hash_image": "Reading photos", "hash_similar": "Fingerprinting photos", "similar": "Finding similar photos", "metadata": "Reading metadata", "hash_partial": "Quick hashing same-size files",
-                        "hash_full": "Full hashing likely duplicates", "group": "Building duplicate groups", "done": "Finishing"} %}
+                        "hash_full": "Full hashing likely duplicates", "group": "Building duplicate groups", "done": "Finishing", "changes": "Changing files", "undo": "Undoing"} %}
+  {% set job_names = {"benchmark": "Benchmark", "action": "Change", "undo": "Undo", "purge": "Emptying quarantine"} %}
   <div class="row between">
     <div>
-      <strong>{{ "Benchmark" if active.type == "benchmark" else "Scan" }} #{{ active.id }}</strong>
+      <strong>{{ job_names.get(active.type, "Scan") }} #{{ active.id }}</strong>
       {% if active.state == "queued" and not live %}<span class="pill">queued</span>
       {% elif paused %}<span class="pill warn">paused</span>
       {% else %}<span class="pill ok">running</span>{% endif %}
@@ -23,6 +24,12 @@
       <form method="post" action="/scan/stop"><button class="secondary">Stop</button></form>
     </div>
   </div>
+  {% if live.todo and not live.disks %}
+  {% set pct = (100 * (live.done or 0) / live.todo) | round(1) %}
+  <p style="margin:8px 0 0"><progress max="100" value="{{ pct }}"></progress> {{ "{:,}".format(live.done or 0) }} of {{ "{:,}".format(live.todo) }} files
+    {% if live.action %}· <a href="/changes/{{ live.action }}">details</a>{% endif %}
+    <span class="muted small path" title="{{ live.current }}">{{ live.current }}</span></p>
+  {% endif %}
   {% if live.disks %}
   <table class="disks">
     <thead><tr><th>Disk</th><th>State</th><th class="num">Files walked</th><th class="num">New / changed</th><th>Hashing</th><th>Current</th></tr></thead>

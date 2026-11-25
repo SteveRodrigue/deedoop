@@ -6,7 +6,8 @@
   <a href="/reorganize">New plan</a>
   <a href="/plans" class="on">Saved plans</a>
 </nav>
-{% if saved %}<p class="flash ok">Plan saved. Nothing was moved: it waits here until milestone 6 can apply it after you confirm.</p>{% endif %}
+{% if saved %}<p class="flash ok">Plan saved. Nothing was moved: apply it below when you are ready.</p>{% endif %}
+{% if error %}<p class="flash err">{{ error }}</p>{% endif %}
 {% if checked != "" %}<p class="flash {{ 'ok' if checked == '0' else 'err' }}">{% if checked == "0" %}Checked against the index: every file is unchanged.{% else %}{{ checked }} files changed or disappeared since the plan was saved. They are marked and will not be applied.{% endif %}</p>{% endif %}
 <section class="card">
   <div class="row between">
@@ -33,6 +34,23 @@
   {{ folder_table(folders, p.moving) }}
 </section>
 {% endif %}
+
+<section class="card {{ 'callout' if gate.open and p.moving }}" id="apply">
+  <h2>Apply this plan</h2>
+  {% if applied %}<p class="small">Applied before: {% for x in applied %}<a href="/changes/{{ x.id }}">#{{ x.id }} ({{ x.state }}, {{ x.created_at | time }})</a>{{ ", " if not loop.last }}{% endfor %}</p>{% endif %}
+  {% if not gate.open %}
+  <p class="muted">Changes are off. {% if not gate.allowed %}Turn on <strong>Allow changes</strong> on the <a href="/setup#changes">Setup</a> screen.{% endif %}
+    {% if not gate.writable %}/mnt is mounted read-only in the container.{% endif %}</p>
+  {% elif p.moving %}
+  <form method="post" action="/plans/{{ p.id }}/apply">
+    <p class="small">Moves {{ "{:,}".format(p.moving) }} files. Each one is checked first: unchanged since the plan, and nothing at its destination.
+      Files on the same disk are renamed; files from another device are copied, checked, and the original goes to quarantine.
+      You can undo the whole plan afterwards.</p>
+    <label class="radio small"><input type="checkbox" name="confirm" value="1"> I looked at the list</label>
+    <button>Apply plan</button>
+  </form>
+  {% else %}<p class="muted">No file in this plan would move.</p>{% endif %}
+</section>
 
 <section class="card" id="items">
   <nav class="tabs status-tabs">
