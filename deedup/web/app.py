@@ -20,7 +20,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from .. import __version__, db, queries, similar
+from .. import __version__, db, plans, queries, similar
 from ..archive_index import refresh_coverage
 from ..archives import read_member_bytes
 from ..categories import CATEGORIES
@@ -436,6 +436,131 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
                       new_bytes=sum(m["size"] for m in members if m["status"] in ("new", "unreadable")),
                       qs=_q_params(status=status if status != "new" else "", album=album))
 
+    # -- reorganise (milestone 5: plans only, nothing is moved) ---------------------
+
+    def _plan_inputs(c, loc, dir, q, kind, year, camera, no_gps, no_date, dups):
+        locs = queries.locations(c)
+        if not loc and locs:
+            loc = locs[0]["key"]
+        flt = queries.BrowseFilter(loc=loc, dir=dir.strip("/"), q=q, kind=kind, year=year, camera=camera,
+                                   no_gps=bool(no_gps), no_date=bool(no_date), dups=bool(dups))
+        source = {"loc": loc, "dir": flt.dir, "q": q, "kind": kind, "year": year, "camera": camera,
+                  "no_gps": no_gps, "no_date": no_date, "dups": dups}
+        return locs, flt, source
+
+    def _run_preview(c, flt, rule):
+        rows = queries.selection(c, flt, limit=PLAN_LIMIT + 1)
+        capped = len(rows) > PLAN_LIMIT
+        return plans.preview(c, cfg.mnt, rows[:PLAN_LIMIT], rule), capped
+
+    @app.get("/reorganize", response_class=HTMLResponse)
+    def reorganize(request: Request, loc: str = "", dir: str = "", q: str = "", kind: str = "", year: str = "",
+                   camera: str = "", no_gps: str = "", no_date: str = "", dups: str = "", template: str = "",
+                   fallback: str = "undated", conflicts: str = "rename", status: str = "", page: int = 1):
+        c = conn()
+        try:
+            locs, flt, source = _plan_inputs(c, loc, dir, q, kind, year, camera, no_gps, no_date, dups)
+            rule = plans.Rule(template.strip() or plans.DEFAULT_TEMPLATE, fallback, conflicts)
+            error, items, capped = "", [], False
+            if locs:
+                try:
+                    items, capped = _run_preview(c, flt, rule)
+                except plans.RuleError as e:
+                    error = str(e)
+            base = next((x["user_path"] for x in locs if x["key"] == flt.loc), "")
+        finally:
+            c.close()
+        summ = plans.summary(items)
+        shown = [i for i in items if not status or i.status == status]
+        per_page = 200
+        pages = max(1, -(-len(shown) // per_page))
+        page = min(max(page, 1), pages)
+        src_qs = _q_params(**source)
+        rule_qs = _q_params(template=rule.template, fallback=fallback if fallback != "undated" else "",
+                            conflicts=conflicts if conflicts != "rename" else "")
+        return render(request, "reorganize.html", locs=locs, flt=flt, source=source, rule=rule, error=error,
+                      summ=summ, shown=shown[(page - 1) * per_page:page * per_page], total_shown=len(shown),
+                      status=status, page=page, pages=pages, capped=capped, limit=PLAN_LIMIT, base=base,
+                      statuses=plans.STATUS, presets=plans.PRESETS, tokens=plans.TOKENS,
+                      fallbacks=plans.FALLBACKS, conflict_opts=plans.CONFLICTS, src_qs=src_qs, rule_qs=rule_qs)
+
+    @app.post("/reorganize/save")
+    def reorganize_save(loc: str = Form(""), dir: str = Form(""), q: str = Form(""), kind: str = Form(""),
+                        year: str = Form(""), camera: str = Form(""), no_gps: str = Form(""),
+                        no_date: str = Form(""), dups: str = Form(""), template: str = Form(...),
+                        fallback: str = Form("undated"), conflicts: str = Form("rename"), name: str = Form("")):
+        c = conn()
+        try:
+            _locs, flt, source = _plan_inputs(c, loc, dir, q, kind, year, camera, no_gps, no_date, dups)
+            rule = plans.Rule(template.strip(), fallback, conflicts)
+            try:
+                items, _capped = _run_preview(c, flt, rule)
+            except plans.RuleError:
+                return RedirectResponse("/reorganize?" + _q_params(**source, template=template), status_code=303)
+            pid = plans.save(c, name or rule.template, rule, source, items)
+        finally:
+            c.close()
+        return RedirectResponse(f"/plans/{pid}?saved=1", status_code=303)
+
+    @app.get("/plans", response_class=HTMLResponse)
+    def plans_page(request: Request):
+        c = conn()
+        try:
+            return render(request, "plans.html", plans=plans.list_plans(c), statuses=plans.STATUS)
+        finally:
+            c.close()
+
+    @app.get("/plans/{plan_id}", response_class=HTMLResponse)
+    def plan_page(request: Request, plan_id: int, status: str = "", page: int = 1, saved: str = "",
+                  checked: str = ""):
+        c = conn()
+        try:
+            p = plans.get_plan(c, plan_id)
+            if p is None:
+                return Response("No such plan", status_code=404)
+            per_page = 200
+            items, total = plans.plan_items(c, plan_id, status, page, per_page)
+            folders = plans.plan_folders(c, plan_id)
+        finally:
+            c.close()
+        pages = max(1, -(-total // per_page))
+        return render(request, "plan.html", p=p, items=items, total=total, status=status, page=page, pages=pages,
+                      statuses=plans.STATUS, folders=folders, saved=saved, checked=checked,
+                      src_qs=_q_params(**p["source"], template=p["rule"]["template"],
+                                       fallback=p["rule"]["fallback"], conflicts=p["rule"]["conflicts"]))
+
+    @app.post("/plans/{plan_id}/recheck")
+    def plan_recheck(plan_id: int):
+        c = conn()
+        try:
+            res = plans.recheck(c, plan_id)
+        finally:
+            c.close()
+        return RedirectResponse(f"/plans/{plan_id}?checked={res['stale']}", status_code=303)
+
+    @app.post("/plans/{plan_id}/delete")
+    def plan_delete(plan_id: int):
+        c = conn()
+        try:
+            with db.Tx(c):
+                c.execute("DELETE FROM plans WHERE id = ?", (plan_id,))
+        finally:
+            c.close()
+        return RedirectResponse("/plans", status_code=303)
+
+    @app.get("/plans/{plan_id}/export.csv")
+    def plan_export(plan_id: int):
+        c = conn()
+        try:
+            p = plans.get_plan(c, plan_id)
+            if p is None:
+                return Response(status_code=404)
+            body = "".join(plans.export_csv(c, plan_id))
+        finally:
+            c.close()
+        return Response(body, media_type="text/csv", headers={
+            "Content-Disposition": f'attachment; filename="deedup-plan-{plan_id}.csv"'})
+
     @app.get("/same-path", response_class=HTMLResponse)
     def same_path(request: Request):
         c = conn()
@@ -518,6 +643,8 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
 
     return app
 
+
+PLAN_LIMIT = 50_000  # files in one preview; narrow the folder or filters for more
 
 PLACEHOLDER_SVG = (
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 30"><rect width="40" height="30" fill="#8884"/>'

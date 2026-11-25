@@ -217,6 +217,34 @@ MIGRATIONS: list[str] = [
     -- Archives indexed before perceptual hashes existed are read once more.
     ALTER TABLE archives ADD COLUMN version INTEGER NOT NULL DEFAULT 1;
     """,
+    # v5: reorganisation plans (milestone 5). Preview only: milestone 6 applies them.
+    """
+    CREATE TABLE plans (
+        id          INTEGER PRIMARY KEY,
+        name        TEXT NOT NULL,
+        kind        TEXT NOT NULL,        -- move
+        rule        TEXT NOT NULL,        -- JSON: template, fallback, conflicts
+        source      TEXT NOT NULL,        -- JSON: the Browse location and filters
+        counts      TEXT NOT NULL,        -- JSON: items per status
+        created_at  REAL NOT NULL,
+        checked_at  REAL
+    );
+    CREATE TABLE plan_items (
+        plan_id   INTEGER NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
+        file_id   INTEGER NOT NULL,       -- no foreign key: a plan outlives a rescan
+        src_path  TEXT NOT NULL,
+        src_user  TEXT NOT NULL,
+        dst_path  TEXT NOT NULL,
+        dst_user  TEXT NOT NULL,
+        size      INTEGER NOT NULL,
+        mtime_ns  INTEGER NOT NULL,
+        status    TEXT NOT NULL,
+        note      TEXT NOT NULL DEFAULT '',
+        stale     INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (plan_id, file_id)
+    ) WITHOUT ROWID;
+    CREATE INDEX plan_items_status ON plan_items(plan_id, status);
+    """,
 ]
 
 DEFAULT_SETTINGS: dict[str, Any] = {

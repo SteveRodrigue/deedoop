@@ -97,7 +97,7 @@ input, select, textarea { font: inherit; color: var(--ink); background: var(--bg
 textarea { width: 100%; font: 12.5px ui-monospace, monospace; }
 label { display: block; margin: 8px 0; }
 label.radio { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.pill { display: inline-block; font-size: 11.5px; padding: 0 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+.pill { display: inline-block; white-space: nowrap; font-size: 11.5px; padding: 0 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
 .pill.ok { color: var(--ok); border-color: var(--ok); }
 .pill.warn { color: var(--warn); border-color: var(--warn); }
 .flash { padding: 10px 14px; border-radius: 8px; margin-bottom: 16px; }
@@ -167,6 +167,15 @@ details.group .path { flex: 1; }
 button.danger { background: transparent; color: var(--err); border: 1px solid var(--err); }
 .c-similar { background: var(--similar); }
 .thumb.xs { width: 56px; height: 56px; }
+/* reorganisation plans */
+.plan-form input.rule { display: block; width: 100%; box-sizing: border-box; margin-top: 4px; font-size: 14px; padding: 8px 10px; }
+.presets { margin-top: 6px; }
+.presets a { border: 1px solid var(--line); border-radius: 999px; padding: 1px 10px; }
+.presets a.on { border-color: var(--accent); color: var(--ink); }
+table.plan td.move { max-width: 0; width: 100%; }
+table.plan td.move .path { max-width: none; }
+table.plan .to { color: var(--ink); font-weight: 500; }
+.pill.dup { color: var(--accent); border-color: var(--accent); }
 
 @media (max-width: 640px) {
   .theme { margin-left: 0; }
@@ -187,4 +196,8 @@ button.danger { background: transparent; color: var(--err); border: 1px solid va
   .side .kv { grid-template-columns: 1fr; font-size: 12px; }
   .decide kbd { display: none; }
   .hide-phone { display: none; }
+  table.plan { display: table; table-layout: fixed; width: 100%; }
+  table.plan td.move .path { white-space: normal; word-break: break-all; }
+  table.plan th:nth-child(3), table.plan td:nth-child(3) { width: 96px; }
+  .col-mtime { display: none; }
 }
