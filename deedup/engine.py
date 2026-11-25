@@ -26,6 +26,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import db
+from .archive_index import (
+    archive_candidates,
+    archive_disk,
+    json_disk,
+    loose_json_candidates,
+    pair_sidecars,
+    refresh_coverage,
+)
 from .categories import group_category
 from .control import Control, Status
 from .discovery import natural_key, sync_share_roots
@@ -39,7 +47,7 @@ log = logging.getLogger("deedup.engine")
 FLUSH_SECONDS = 2.0
 META_BATCH = 100
 # Phases whose progress is shown in bytes rather than files.
-BYTE_PHASES = {"hash_full", "hash_image"}
+BYTE_PHASES = {"hash_full", "hash_image", "archives"}
 
 
 @dataclass
@@ -115,24 +123,30 @@ def run_scan(ctx: ScanContext) -> dict:
                           lambda disk: worker(ctx, disk, phase, by_disk.get(disk, []), settings))
             _save_cursor(conn, ctx.job_id, {"phase": phase + "_done"})
 
-        # 2. photos: one full read gives the image-data hash and the exact hashes
+        # 2. archives: members are streamed through the same hashes, nothing is extracted
+        run_phase("archives", archive_candidates(conn, settings), archive_disk)
+        run_phase("sidecars", loose_json_candidates(conn, settings), json_disk)
+        # 3. photos: one full read gives the image-data hash and the exact hashes
         if settings["image_matching"]:
             run_phase("hash_image", _image_candidates(conn, min_size), _hash_disk)
-        # 3. metadata: headers only, through ExifTool
+        # 4. metadata: headers only, through ExifTool
         if settings["metadata"]:
             if exiftool_available():
                 run_phase("metadata", _metadata_candidates(conn), _metadata_disk)
             else:
                 log.warning("exiftool not found; skipping metadata")
-        # 4. partial hashes, 5. full hashes
+        # 5. partial hashes, 6. full hashes
         for phase in ("hash_partial", "hash_full"):
             run_phase(phase, _candidates(conn, phase, min_size), _hash_disk)
 
-        # 6. groups
+        # 7. groups, Takeout sidecars, archive coverage
         st.set(phase="group")
         summary = rebuild_exact_groups(conn, min_size)
         img = rebuild_image_groups(conn, min_size) if settings["image_matching"] else _drop_groups(conn, "image")
         summary.update({"image_groups": img["groups"], "image_wasted": img["wasted"]})
+        summary["sidecars"] = pair_sidecars(conn)
+        refresh_coverage(conn)
+        summary["archives"] = conn.execute("SELECT COUNT(*) FROM archives").fetchone()[0]
         st.set(phase="done")
         return summary
     finally:
@@ -143,10 +157,15 @@ def _save_cursor(conn: sqlite3.Connection, job_id: int, cursor: dict) -> None:
     conn.execute("UPDATE jobs SET cursor = ? WHERE id = ?", (json.dumps(cursor), job_id))
 
 
-_LIVE = """
-    SELECT f.id, f.size, f.dev, f.inode, f.mtime_ns, f.dir, f.name, r.disk, r.path AS root_path {extra}
-    FROM files f JOIN roots r ON r.id = f.root_id {join}
-    WHERE f.state = 'present' AND r.enabled = 1 AND f.container_id = 0 AND f.size >= :min
+# One physical copy: a loose file is its device and inode (hardlinks are one
+# copy); an archive member is a copy of its own.
+PHYS = "CASE WHEN f.container_id = 0 THEN f.dev || ':' || f.inode ELSE 'm' || f.id END"
+
+_LIVE = f"""
+    SELECT f.id, f.size, f.dev, f.inode, f.mtime_ns, f.dir, f.name, f.container_id, {PHYS} AS phys,
+           r.disk, r.path AS root_path {{extra}}
+    FROM files f JOIN roots r ON r.id = f.root_id {{join}}
+    WHERE f.state = 'present' AND r.enabled = 1 AND f.size >= :min
 """
 
 
@@ -155,9 +174,9 @@ def _candidates(conn: sqlite3.Connection, phase: str, min_size: int) -> list[sql
         live = _LIVE.format(extra="", join="")
         sql = f"""
             WITH live AS ({live}),
-            keys AS (SELECT size FROM live GROUP BY size HAVING COUNT(DISTINCT dev || ':' || inode) > 1)
+            keys AS (SELECT size FROM live GROUP BY size HAVING COUNT(DISTINCT phys) > 1)
             SELECT live.* FROM live JOIN keys USING (size)
-            WHERE NOT EXISTS (SELECT 1 FROM hashes h WHERE h.file_id = live.id AND h.kind = 'partial')
+            WHERE live.container_id = 0 AND NOT EXISTS (SELECT 1 FROM hashes h WHERE h.file_id = live.id AND h.kind = 'partial')
             ORDER BY live.disk, live.dev, live.inode
         """
     else:
@@ -168,9 +187,9 @@ def _candidates(conn: sqlite3.Connection, phase: str, min_size: int) -> list[sql
         sql = f"""
             WITH live AS ({live}),
             keys AS (SELECT size, pv FROM live GROUP BY size, pv
-                     HAVING COUNT(DISTINCT dev || ':' || inode) > 1)
+                     HAVING COUNT(DISTINCT phys) > 1)
             SELECT live.* FROM live JOIN keys USING (size, pv)
-            WHERE NOT EXISTS (SELECT 1 FROM hashes h WHERE h.file_id = live.id AND h.kind = 'blake3')
+            WHERE live.container_id = 0 AND NOT EXISTS (SELECT 1 FROM hashes h WHERE h.file_id = live.id AND h.kind = 'blake3')
             ORDER BY live.disk, live.dev, live.inode
         """
     return conn.execute(sql, {"min": min_size}).fetchall()
@@ -180,7 +199,8 @@ def _image_candidates(conn: sqlite3.Connection, min_size: int) -> list[sqlite3.R
     exts = sorted(IMAGE_HASH_EXTS)
     live = _LIVE.format(extra=", f.ext", join="")
     sql = f"""
-        WITH live AS ({live} AND f.ext IN ({",".join("?" * len(exts))}) AND f.size <= {MAX_IMAGE_BYTES})
+        WITH live AS ({live} AND f.container_id = 0 AND f.ext IN ({",".join("?" * len(exts))})
+                      AND f.size <= {MAX_IMAGE_BYTES})
         SELECT * FROM live
         WHERE NOT EXISTS (SELECT 1 FROM hashes h WHERE h.file_id = live.id AND h.kind IN ('img_exact', 'img_none'))
         ORDER BY live.disk, live.dev, live.inode
@@ -192,7 +212,7 @@ def _metadata_candidates(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     exts = sorted(METADATA_EXTS)
     live = _LIVE.format(extra=", f.ext", join="")
     sql = f"""
-        WITH live AS ({live} AND f.ext IN ({",".join("?" * len(exts))}))
+        WITH live AS ({live} AND f.container_id = 0 AND f.ext IN ({",".join("?" * len(exts))}))
         SELECT * FROM live WHERE NOT EXISTS (SELECT 1 FROM media m WHERE m.file_id = live.id)
         ORDER BY live.disk, live.root_path, live.dir, live.name
     """
@@ -309,11 +329,16 @@ def _hash_disk(ctx: ScanContext, disk: str, phase: str, rows: list[sqlite3.Row],
 
 
 def rebuild_exact_groups(conn: sqlite3.Connection, min_size: int = 1) -> dict:
-    """Recompute the ``exact`` duplicate groups from stored BLAKE3 hashes."""
+    """Recompute the ``exact`` duplicate groups from stored BLAKE3 hashes.
+
+    Archive members join groups, but only loose files count as reclaimable:
+    a copy inside a zip cannot be deleted on its own, and the last loose
+    copy is never counted because an archive also holds it.
+    """
     rows = conn.execute(
-        """
+        f"""
         WITH live AS (
-            SELECT f.id, f.size, f.dev, f.inode, f.ext, h.value
+            SELECT f.id, f.size, f.ext, f.container_id, {PHYS} AS phys, h.value
             FROM files f
             JOIN roots r ON r.id = f.root_id
             JOIN hashes h ON h.file_id = f.id AND h.kind = 'blake3'
@@ -321,7 +346,7 @@ def rebuild_exact_groups(conn: sqlite3.Connection, min_size: int = 1) -> dict:
         ),
         keys AS (
             SELECT size, value FROM live GROUP BY size, value
-            HAVING COUNT(DISTINCT dev || ':' || inode) > 1
+            HAVING COUNT(DISTINCT phys) > 1
         )
         SELECT live.* FROM live JOIN keys USING (size, value) ORDER BY live.size, live.value, live.id
         """,
@@ -333,8 +358,9 @@ def rebuild_exact_groups(conn: sqlite3.Connection, min_size: int = 1) -> dict:
         conn.execute("DELETE FROM groups WHERE method = 'exact'")
         for (size, value), members in itertools.groupby(rows, key=lambda r: (r["size"], r["value"])):
             members = list(members)
-            copies = len({(m["dev"], m["inode"]) for m in members})
-            w = size * (copies - 1)
+            copies = len({m["phys"] for m in members})
+            loose = len({m["phys"] for m in members if m["container_id"] == 0})
+            w = size * max(loose - 1, 0)
             cur = conn.execute(
                 "INSERT INTO groups(method, key, size, file_count, copies, wasted, category, built_at) "
                 "VALUES ('exact', ?, ?, ?, ?, ?, ?, ?)",
@@ -364,9 +390,9 @@ def rebuild_image_groups(conn: sqlite3.Connection, min_size: int = 1) -> dict:
     file, which usually carries the most metadata.
     """
     rows = conn.execute(
-        """
+        f"""
         WITH live AS (
-            SELECT f.id, f.size, f.dev, f.inode, f.ext, i.value AS img, b.value AS full
+            SELECT f.id, f.size, f.ext, f.container_id, {PHYS} AS phys, i.value AS img, b.value AS full
             FROM files f
             JOIN roots r ON r.id = f.root_id
             JOIN hashes i ON i.file_id = f.id AND i.kind = 'img_exact'
@@ -384,11 +410,15 @@ def rebuild_image_groups(conn: sqlite3.Connection, min_size: int = 1) -> dict:
         conn.execute("DELETE FROM groups WHERE method = 'image'")
         for img, members in itertools.groupby(rows, key=lambda r: r["img"]):
             members = list(members)
-            phys: dict[tuple, int] = {}
+            phys: dict[str, int] = {}
+            loose: dict[str, int] = {}
             for m in members:
-                phys[(m["dev"], m["inode"])] = m["size"]
+                phys[m["phys"]] = m["size"]
+                if m["container_id"] == 0:
+                    loose[m["phys"]] = m["size"]
             sizes = sorted(phys.values(), reverse=True)
-            w = sum(sizes[1:])
+            ls = sorted(loose.values(), reverse=True)
+            w = sum(ls[1:])
             cur = conn.execute(
                 "INSERT INTO groups(method, key, size, file_count, copies, wasted, category, built_at) "
                 "VALUES ('image', ?, ?, ?, ?, ?, 'image', ?)",

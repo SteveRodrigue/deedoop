@@ -13,7 +13,7 @@
       <dt>Size</dt><dd>{{ f.size | bytes }} ({{ "{:,}".format(f.size) }} bytes)</dd>
       <dt>Modified</dt><dd>{{ f.mtime | time }}</dd>
       <dt>Disk</dt><dd>{{ f.disk }}</dd>
-      <dt>Physical path</dt><dd class="mono">{{ f.path }}</dd>
+      <dt>{{ "Path on disk" if not f.container else "Physical path" }}</dt><dd class="mono">{{ f.path }}</dd>
       {% if f.nlink > 1 %}<dt>Hardlinks</dt><dd>{{ f.nlink }} paths share this file</dd>{% endif %}
       {% if f.mime %}<dt>Type</dt><dd>{{ f.mime }}</dd>{% endif %}
       {% if f.taken_at %}<dt>Taken</dt><dd>{{ f.taken_at }}</dd>{% endif %}
@@ -23,10 +23,29 @@
       {% if f.gps %}<dt>GPS</dt><dd>{{ "%.6f" | format(f.gps_lat) }}, {{ "%.6f" | format(f.gps_lon) }}
         <a class="small" href="https://www.openstreetmap.org/?mlat={{ f.gps_lat }}&mlon={{ f.gps_lon }}#map=15/{{ f.gps_lat }}/{{ f.gps_lon }}" rel="noreferrer noopener" target="_blank">map</a></dd>{% endif %}
       {% if f.orientation and f.orientation != 1 %}<dt>Orientation</dt><dd>EXIF {{ f.orientation }}</dd>{% endif %}
+      {% if f.container %}<dt>Inside archive</dt><dd><a href="/file/{{ f.container.id }}">{{ f.container.path }}</a>
+        · <a class="small" href="/archives/{{ f.container.top_id }}">coverage</a></dd>{% endif %}
+      {% if f.sidecar %}<dt>Takeout JSON</dt><dd><a href="/file/{{ f.sidecar.json_file_id }}">sidecar</a>
+        {% if f.sidecar.taken_at %}· taken {{ f.sidecar.taken_at }}{% endif %}
+        {% if f.sidecar.lat is not none %}· GPS {{ "%.5f" | format(f.sidecar.lat) }}, {{ "%.5f" | format(f.sidecar.lon) }}{% endif %}
+        {% if f.sidecar.description %}<div class="muted small">{{ f.sidecar.description }}</div>{% endif %}</dd>{% endif %}
       {% if f.error %}<dt>Problem</dt><dd>{{ f.error }}</dd>{% endif %}
     </dl>
   </div>
 </section>
+
+{% if f.archive %}{% set a = f.archive %}
+<section class="card">
+  <h2>Archive contents</h2>
+  {% if a.error %}<p class="flash err">Could not be read: {{ a.error }}</p>
+  {% else %}
+  <p>{{ "{:,}".format(a.media_members or 0) }} files inside: {{ "{:,}".format(a.cov_exact or 0) }} already on disk,
+    {{ "{:,}".format(a.cov_image or 0) }} same photo on disk, {{ "{:,}".format(a.cov_archive or 0) }} only in another archive,
+    {{ "{:,}".format(a.cov_new or 0) }} ({{ a.new_bytes | bytes }}) not on disk yet.</p>
+  <p><a href="/archives/{{ f.id }}">See what's inside</a>{% if a.takeout_set %} <span class="pill">Takeout{% if a.part %} part {{ a.part }}{% endif %}</span>{% endif %}</p>
+  {% endif %}
+</section>
+{% endif %}
 
 <section class="card">
   <h2>Duplicates</h2>

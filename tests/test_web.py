@@ -117,7 +117,9 @@ def test_basic_auth(tmp_path):
 def test_schedule_window():
     import datetime as dt
 
-    at = lambda h, m=0: dt.datetime(2026, 1, 1, h, m)
+    def at(h, m=0):
+        return dt.datetime(2026, 1, 1, h, m)
+
     assert in_window(at(2), "01:00", "07:00")
     assert not in_window(at(8), "01:00", "07:00")
     assert in_window(at(23, 30), "22:00", "06:00") and in_window(at(3), "22:00", "06:00")

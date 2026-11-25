@@ -22,6 +22,7 @@
       {% for d in disks %}<option value="{{ d }}" {{ "selected" if flt.disk == d }}>{{ d }}</option>{% endfor %}
     </select>
     <input type="search" name="q" value="{{ flt.q }}" placeholder="Path contains…">
+    <label class="small"><input type="checkbox" name="archives" value="1" {{ "checked" if flt.archives }}> Include copies only inside archives</label>
     <label class="small">Min size <input type="number" name="min_mb" value="{{ min_mb }}" min="0" step="any" style="width:6em"> MB</label>
     <button>Filter</button>
     {% if flt.group %}<a href="/duplicates{{ '?method=' ~ flt.method if flt.method != 'exact' }}">Show all groups</a>{% endif %}
@@ -31,7 +32,7 @@
   </form>
   {% if flt.method == "exact" %}
   <p><strong>{{ "{:,}".format(total) }}</strong> groups of byte-identical files, <strong>{{ wasted | bytes }}</strong> reclaimable.
-    <span class="muted small">Sorted by reclaimable space. Hardlinked paths share one copy on disk and are not counted as waste.</span></p>
+    <span class="muted small">Sorted by reclaimable space. Hardlinked paths share one copy on disk, and copies inside archives can't be removed on their own, so neither counts as waste.</span></p>
   {% else %}
   <p><strong>{{ "{:,}".format(total) }}</strong> photos stored more than once with different metadata, <strong>{{ wasted | bytes }}</strong> reclaimable.
     <span class="muted small">The image data is identical; only EXIF, XMP, GPS, dates or embedded thumbnails differ.
@@ -56,7 +57,7 @@
       <div class="meta">
         <div title="{{ m.user_path }}"><a href="/file/{{ m.file_id }}">{{ m.user_path.rsplit("/", 1)[-1] }}</a></div>
         <div class="muted" title="{{ m.user_path }}">{{ m.user_path.rsplit("/", 1)[0] }}</div>
-        <div>{{ m.disk }} {% if m.hardlinked %}<span class="pill">hardlink</span>{% endif %}</div>
+        <div>{{ m.disk }} {% if m.hardlinked %}<span class="pill">hardlink</span>{% endif %}{% if m.in_archive %}<span class="pill" title="Inside an archive; not counted as reclaimable">in archive</span>{% endif %}</div>
         <div><span class="{{ 'differs' if 'size' in m.differs }}">{{ m.size | bytes }}</span>
           {% if m.dims %}· <span class="{{ 'differs' if 'dims' in m.differs }}">{{ m.dims }}</span>{% endif %}</div>
         <div title="Date taken"><span class="{{ 'differs' if 'taken_at' in m.differs }}">{{ m.taken_at or "no date taken" }}</span></div>
@@ -75,7 +76,8 @@
       <td class="path" title="{{ m.path }}"><a href="/file/{{ m.file_id }}">{{ m.user_path }}</a></td>
       <td>{{ m.disk }}</td>
       <td class="muted col-mtime">{{ m.mtime | time }}</td>
-      <td>{% if m.hardlinked %}<span class="pill" title="Same inode as another path in this group">hardlink</span>{% endif %}</td>
+      <td>{% if m.hardlinked %}<span class="pill" title="Same inode as another path in this group">hardlink</span>{% endif %}
+        {% if m.in_archive %}<span class="pill" title="Inside an archive; not counted as reclaimable">in archive</span>{% endif %}</td>
     </tr>
     {% endfor %}
   </table>
@@ -83,7 +85,7 @@
   {% endif %}
 </details>
 {% else %}
-<section class="card"><p class="muted">No groups{% if flt.q or flt.category or flt.disk or flt.min_size or flt.group %} match these filters{% else %} yet. Run a scan from the <a href="/">Dashboard</a>{% endif %}.</p></section>
+<section class="card"><p class="muted">No groups{% if flt.q or flt.category or flt.disk or flt.min_size or flt.group or flt.archives %} match these filters{% else %} yet. Run a scan from the <a href="/">Dashboard</a>{% endif %}.</p></section>
 {% endfor %}
 
 {% if pages > 1 %}

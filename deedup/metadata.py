@@ -86,15 +86,20 @@ def normalise_date(v) -> str | None:
     return f"{y}-{mo}-{d} {h}:{mi}:{s}"
 
 
+def camera_name(make, model) -> str | None:
+    """'Canon' + 'Canon EOS 80D' -> 'Canon EOS 80D'; 'Apple' + 'iPhone 12' -> 'Apple iPhone 12'."""
+    make = str(make or "").strip().strip("\x00")
+    model = str(model or "").strip().strip("\x00")
+    if model and make and model.lower().startswith(make.split()[0].lower()):
+        make = ""
+    return " ".join(x for x in (make, model) if x) or None
+
+
 def parse(d: dict) -> Media:
     m = Media()
     m.mime = _by_tag(d, "MIMEType")
     m.taken_at = normalise_date(_first(d, DATE_KEYS))
-    make = (_by_tag(d, "Make") or "").strip()
-    model = (_by_tag(d, "Model") or "").strip()
-    if model and make and model.lower().startswith(make.split()[0].lower()):
-        make = ""
-    m.camera = " ".join(x for x in (make, model) if x) or None
+    m.camera = camera_name(_by_tag(d, "Make"), _by_tag(d, "Model"))
     w, h = _first(d, WIDTH_KEYS), _first(d, HEIGHT_KEYS)
     m.width = int(w) if isinstance(w, (int, float)) else None
     m.height = int(h) if isinstance(h, (int, float)) else None

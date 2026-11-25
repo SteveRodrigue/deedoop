@@ -9,6 +9,9 @@ Ideas borrowed, with thanks (no code copied):
     diff-based incremental rescans.
   - fclones (https://github.com/pkolaczk/fclones), MIT licence:
     size, then prefix, then full-hash grouping.
+  - immich-go (https://github.com/simulot/immich-go), AGPL-3.0 licence:
+    the rules for matching Google Takeout JSON sidecars to their photos
+    (re-implemented from the documented behaviour; no code copied).
 
 Bundled third-party software:
   - htmx 2.0.4 (https://htmx.org), Zero-Clause BSD licence,

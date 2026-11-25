@@ -70,9 +70,12 @@
   <div class="grid2">
     <label>Exclusions <span class="muted small">one pattern per line, matched against names and share-relative paths (* and ? work)</span>
       <textarea name="exclusions" rows="6">{{ settings.exclusions | join("\n") }}</textarea></label>
-    <label>Takeout and archive folders <span class="muted small">one path per line; recorded now, used from milestone 3</span>
+    <label>Takeout and archive folders <span class="muted small">one path per line, such as /mnt/user/Backups/Takeout;
+      zip, tar and 7z files there are opened and their contents compared with your disks</span>
       <textarea name="takeout_paths" rows="6">{{ settings.takeout_paths | join("\n") }}</textarea></label>
   </div>
+  <label class="radio"><input type="checkbox" name="archives_everywhere" value="1" {{ "checked" if settings.archives_everywhere }}>
+    Open archives in every scanned folder <span class="muted small">(slower: each archive is read once in full; archives are never extracted to disk)</span></label>
   <label>Ignore files smaller than <input type="number" name="min_size" min="1" value="{{ settings.min_size }}"> bytes</label>
 </section>
 

@@ -93,13 +93,13 @@ class _Writer:
                 # reporting its files as gone.
                 if d:
                     c.execute(
-                        "UPDATE files SET last_seen_run=? WHERE root_id=? AND state='present' "
+                        "UPDATE files SET last_seen_run=? WHERE root_id=? AND state='present' AND container_id=0 "
                         "AND (dir=? OR substr(dir, 1, ?)=?)",
                         (self.run_id, self.root_id, d, len(d) + 1, d + "/"),
                     )
                 else:
                     c.execute(
-                        "UPDATE files SET last_seen_run=? WHERE root_id=? AND state='present'",
+                        "UPDATE files SET last_seen_run=? WHERE root_id=? AND state='present' AND container_id=0",
                         (self.run_id, self.root_id),
                     )
         self.inserts, self.updates, self.touches, self.touch_dirs = [], [], [], []
@@ -186,7 +186,8 @@ def walk_root(
     if res.complete:
         with Tx(conn):
             conn.execute(
-                "UPDATE files SET state='gone' WHERE root_id=? AND last_seen_run<? AND state='present'",
+                "UPDATE files SET state='gone' WHERE root_id=? AND last_seen_run<? AND state='present' "
+                "AND container_id=0",
                 (root["id"], run_id),
             )
             conn.execute(

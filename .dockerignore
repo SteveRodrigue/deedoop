@@ -1,7 +1,13 @@
 .git
 .github
-tests
 **/__pycache__
 *.egg-info
 .pytest_cache
 .ruff_cache
+.venv
+venv
+appdata
+fakemnt
+**/*.db
+**/*.db-wal
+**/*.db-shm
