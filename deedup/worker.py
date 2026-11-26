@@ -17,7 +17,7 @@ import traceback
 from . import changes, db
 from .benchmark import BenchConfig, disk_paths_for_benchmark, run_benchmark
 from .config import AppConfig
-from .control import Control, Status, Stopped
+from .control import Control, Status, Stopped, fmt_seconds
 from .discovery import list_disks
 from .engine import ScanContext, regroup, run_scan
 
@@ -39,12 +39,58 @@ def in_window(now: dt.datetime, start: str, end: str) -> bool:
     return s <= t < e if s < e else (t >= s or t < e)
 
 
+JOB_NAMES = {"scan": "Scan", "benchmark": "Benchmark", "action": "Change", "undo": "Undo",
+             "purge": "Emptying quarantine", "regroup": "Regrouping"}
+
+
+def _outcome(state: str, error: str | None, result: dict, snap: dict) -> tuple[str, str]:
+    took = fmt_seconds(snap.get("active", 0.0))
+    if state == "done":
+        bits = []
+        if "groups" in result:
+            bits.append(f"{result['groups']:,} exact groups")
+        if "image_groups" in result:
+            bits.append(f"{result['image_groups']:,} photos with other metadata")
+        if "media_groups" in result:
+            bits.append(f"{result['media_groups']:,} recordings with other tags")
+        if snap.get("log_dropped"):
+            bits.append(f"{snap['log_dropped']:,} more log lines not kept")
+        return "info", f"Finished in {took}" + (": " + ", ".join(bits) if bits else "")
+    if state == "queued":
+        return "info", f"Interrupted by a restart after {took}; carries on when deedup starts"
+    if state == "stopped":
+        return "warn", f"Stopped after {took}: {error}"
+    return "error", f"Failed after {took}: {(error or '').splitlines()[0] if error else 'unknown error'}"
+
+
+class JobLogHandler(logging.Handler):
+    """Copies warnings from the scan modules into the scan log of the running
+    job. Only these modules: the web and sign-in modules stay out, so the log
+    never holds a setup code or a user name (SC8)."""
+
+    SOURCES = ("deedup.engine", "deedup.scanner", "deedup.archive_index", "deedup.media_index",
+               "deedup.metadata", "deedup.av", "deedup.changes")
+
+    def __init__(self, status: Status):
+        super().__init__(logging.WARNING)
+        self.status = status
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if record.name not in self.SOURCES:
+            return
+        try:
+            self.status.log("error" if record.levelno >= logging.ERROR else "warn", record.getMessage())
+        except Exception:  # noqa: BLE001 - logging must never break a job
+            self.handleError(record)
+
+
 class Worker:
     def __init__(self, cfg: AppConfig, bench_cfg: BenchConfig | None = None):
         self.cfg = cfg
         self.bench_cfg = bench_cfg or BenchConfig()
         self.status = Status()
         self.control = Control()
+        self._log_handler = JobLogHandler(self.status)
         self.current_job: int | None = None
         self._wake = threading.Event()
         self._quit = threading.Event()
@@ -60,6 +106,7 @@ class Worker:
             conn.execute("UPDATE jobs SET state = 'queued' WHERE state = 'running'")
         finally:
             conn.close()
+        logging.getLogger("deedup").addHandler(self._log_handler)
         self._thread = threading.Thread(target=self._loop, name="deedup-worker", daemon=True)
         self._thread.start()
 
@@ -70,6 +117,7 @@ class Worker:
         self._wake.set()
         if self._thread:
             self._thread.join(timeout)
+        logging.getLogger("deedup").removeHandler(self._log_handler)
 
     def wake(self) -> None:
         self._wake.set()
@@ -77,12 +125,21 @@ class Worker:
     # -- controls -----------------------------------------------------------
 
     def pause(self) -> None:
+        if self.current_job is not None and not self.control.paused:
+            self.status.log("info", "Paused")
         self.control.pause()
+        self.status.paused(True)
 
     def resume(self) -> None:
+        if self.current_job is not None and self.control.paused:
+            self.status.log("info", "Resumed")
+        self.status.paused(False)
         self.control.resume()
 
     def stop(self) -> None:
+        if self.current_job is not None:
+            self.status.log("info", "Stop requested")
+        self.status.paused(False)
         self.control.stop("stopped by user")
 
     # -- loop ---------------------------------------------------------------
@@ -123,6 +180,7 @@ class Worker:
             now = dt.datetime.now()
             inside = in_window(now, s["schedule_start"], s["schedule_end"])
             if self.current_job is not None and not inside and self._job_is_scheduled:
+                self.status.log("info", "Schedule window ended: stopping; the next window carries on")
                 self.control.stop("schedule window ended")
                 return
             if inside and self._last_schedule_day != now.date() and db.active_job(conn) is None:
@@ -144,6 +202,10 @@ class Worker:
             self.current_job = job["id"]
             self._job_is_scheduled = bool(params.get("scheduled"))
             self.status.reset(job=job["id"], type=job["type"], phase="starting")
+            db.prune_logs(conn)
+            self.status.log("info", f"{JOB_NAMES.get(job['type'], job['type'])} #{job['id']} "
+                                    f"{'resumed' if job['started_at'] else 'started'}"
+                                    f"{' (scheduled)' if params.get('scheduled') else ''}")
             conn.execute(
                 "UPDATE jobs SET state = 'running', started_at = COALESCE(started_at, ?), error = NULL "
                 "WHERE id = ?",
@@ -179,6 +241,9 @@ class Worker:
             finally:
                 stop_persist.set()
                 persister.join(2)
+            self.status.set(phase="done")
+            self.status.log(*_outcome(state, error, result, self.status.snapshot()))
+            db.add_log(conn, job["id"], self.status.drain_log())
             snap = self.status.snapshot()
             snap["result"] = result
             conn.execute(
@@ -197,6 +262,7 @@ class Worker:
             while not stop.wait(PERSIST_SECONDS):
                 conn.execute("UPDATE jobs SET progress = ? WHERE id = ?",
                              (json.dumps(self.status.snapshot()), job_id))
+                db.add_log(conn, job_id, self.status.drain_log())
         except Exception:
             log.exception("progress persist failed")
         finally:

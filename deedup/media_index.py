@@ -119,7 +119,10 @@ def probe_disk(ctx, disk: str, phase: str, rows: list[sqlite3.Row], settings: di
             control.checkpoint()
             path = os.path.join(row["root_path"], row["dir"], row["name"])
             st.disk(disk, current=path)
-            pending.append(_av_row(row["id"], av.probe(path), time.time()))
+            p = av.probe(path)
+            if p.error:
+                st.log("warn", f"{path}: {p.error}")
+            pending.append(_av_row(row["id"], p, time.time()))
             st.add(disk, "done_files", 1)
             if len(pending) >= FLUSH:
                 flush()
@@ -207,6 +210,8 @@ def stream_disk(ctx, disk: str, phase: str, rows: list[sqlite3.Row], settings: d
             path = os.path.join(row["root_path"], row["dir"], row["name"])
             st.disk(disk, current=path)
             vals = [hash_one(path, row["size"], row["mtime_ns"])]
+            if vals[0][0] == "stream_none":
+                st.log("warn", f"{path}: {vals[0][1].decode(errors='replace')}")
             pending.extend((row["id"], k, v) for k, v in vals)
             last, last_vals = phys, vals
             st.add(disk, "done_files", 1)

@@ -4,7 +4,7 @@
 
 deedup finds the duplicates other tools miss on your Unraid server: identical files with different names, photos that differ only in their metadata, re-compressed copies, and the contents of Google Takeout zips you've already got on disk. It indexes your terabytes incrementally, one disk at a time, and shows you everything before touching a single file.
 
-## Status: milestone 7
+## Status: milestone 7.5
 
 deedup finds **exact duplicates of any file type**, **photos that differ only in their metadata**, **similar photos** (recompressed or resized copies, which you review) and **songs and videos that are the same recording with other tags**, looks **inside zip, tar and 7z archives and Google Takeout**, reports what it finds, **plans reorganisations** you can preview, and, once you allow it, **removes duplicates and applies plans** with a quarantine and undo. It is **read-only by default**: nothing changes until you sign in as the admin, turn on changes in Setup, mount `/mnt` read-write, and confirm each list of changes. Signed out, deedup can only be looked at, never changed.
 
@@ -18,7 +18,8 @@ deedup finds **exact duplicates of any file type**, **photos that differ only in
 | Gate | Write access to `/mnt` is turned on only with your OK | done |
 | M6 | Move and delete: quarantine with undo, opt-in direct delete, hardlinks, apply plans | done |
 | M6.5 | Hardening and sign-in: read-only unless signed in, CSRF, security rules enforced in CI | done |
-| M7 | Video and audio: ffprobe details, "same recording, other tags", music view; scanners you can turn off | this release |
+| M7 | Video and audio: ffprobe details, "same recording, other tags", music view; scanners you can turn off | done |
+| M7.5 | Built-in HTTPS; scan progress with phase x of y, start time and ETA; scan log | this release |
 | M8 | Re-encoded songs and videos (audio and video fingerprints) with a review queue | next |
 
 ## What it does
@@ -40,6 +41,8 @@ deedup finds **exact duplicates of any file type**, **photos that differ only in
 - **Sign-in and read-only mode** (milestone 6.5). One admin account. Signed out, deedup never changes anything: every change (files, marks, review decisions, plans, settings, scans) needs the signed-in admin. An admin switch decides what signed-out visitors see: just the scan status and the sign-in form (the default), or every page read-only. On first start, the admin is created with a one-time **setup code** from the container log, so nobody else on your network can claim it. Passwords are hashed with Argon2id; sessions are cookies that expire after 8 hours idle or 7 days; five wrong passwords lock that address for 15 minutes (doubling each time), without locking you out from your other devices. Turning on changes or permanent delete, permanent delete and emptying the quarantine ask for the password again after 10 minutes. Setup shows a security log of sign-ins and changes. See [SECURITY.md](SECURITY.md).
 - **Scanners you can turn off** (milestone 7). Exact copies are always found. Photos, videos, music and audio, and archives are each a scanner with its own switch on the Setup screen. Turn one off and its scan steps are skipped and its duplicate groups and marks are dropped straight away; turn them all off and deedup compares raw file contents only. A scanner whose tools are missing from the container says so and is skipped.
 - **Videos and music** (milestone 7). ffprobe reads every video and song's headers: duration, codecs, resolution, frame rate, bitrate, channels, sample rate and, for music, artist, album, title, track, year, genre and cover art. Files that share a stream layout and a length with another file, and aren't already plain exact copies, get a **stream hash**: a hash of their compressed audio and video packets with tags, cover art, chapters and the container left out (`ffmpeg -c copy -f streamhash`). The new **Same recording, other tags** method on the Duplicates screen groups a song retagged by a music manager, a FLAC with new album art, a phone video whose date was fixed or an MKV remuxed to MP4, with the fields that differ highlighted. These copies are bit-for-bit the same recording, so they count towards reclaimable space; the suggested keeper has the most complete tags. Removing one reads both files again and checks that the streams still match. In **Browse**, filter by artist, codec and length, open the **Music** view (artists, then albums and tracks), and play songs and videos on their file page. Broken or unusual files keep their exact-copy matching and show the reason on their page.
+- **Scan progress and log** (milestone 7.5). The status card shows when the scan started, how long it has run, which phase it is in (**phase 3 of 7**, with a bar for the whole scan), how far that phase is in files or bytes and a rough **time left for the phase**, counting only time spent working (pauses are left out). While deedup walks folders, the total is the last scan's file count. Later phases depend on what earlier ones find, so there is no ETA for the whole scan. The **scan log** (Dashboard > Full log) lists each phase with its duration, the files to read, and every file or folder that could not be read, for the last 30 jobs; filter it to warnings and errors. The last few lines also show under the status card while a scan runs.
+- **Built-in HTTPS** (milestone 7.5). Off by default. Set `DEEDUP_HTTPS=on` and deedup serves HTTPS on its usual port: with your certificate if you put `cert.pem` and `key.pem` in the `tls` folder of its appdata, otherwise with a self-signed certificate it makes on first start (browsers warn once per device; the Setup screen shows the fingerprint to check). A certificate that cannot be used falls back to the self-signed one, and Setup says why. TLS 1.2 and 1.3 only. For access from outside your home, a reverse proxy with a real certificate is still the better choice.
 - **Light and dark themes.** Follows your system setting, or pick Light or Dark in the header; the choice is remembered per browser.
 - **Checks.** Files that exist at the same path on two disks (Unraid shows only one of them in `/mnt/user`), and files that could not be read.
 
@@ -49,7 +52,7 @@ Until deedup is in Community Applications, add it with the template in this repo
 
 1. Copy [`unraid/deedup.xml`](unraid/deedup.xml) to `/boot/config/plugins/dockerMan/templates-user/my-deedup.xml` on your server.
 2. In the Docker tab, click **Add Container**, pick **deedup** from the template list, check the paths and click **Apply**.
-3. Open the container's **Logs** and copy the setup code, then open `http://<server>:8080`, enter the code and create the admin account. (Or set **Admin password (first run only)** in the template.)
+3. Open the container's **Logs** and copy the setup code, then open `http://<server>:8080` (`https://` if you turned on HTTPS), enter the code and create the admin account. (Or set **Admin password (first run only)** in the template.)
 4. Go to **Setup**, tick your shares, then start a scan from the **Dashboard**.
 
 The template maps:
@@ -62,7 +65,7 @@ The template maps:
 
 To let deedup remove duplicates or apply plans, edit the container, set the `/mnt` path's access mode to **Read/Write - Slave**, then sign in and tick **Allow changes** on the Setup screen. Both are needed; until then deedup cannot change a file.
 
-The container runs as `nobody:users` (99:100) with a read-only root filesystem, no Linux capabilities and `no-new-privileges`. Forgot the admin password? From the Unraid terminal: `docker exec -it deedup deedup reset-password`. For access from outside your home, use a VPN or a reverse proxy with HTTPS and set **Trusted proxies**; see [SECURITY.md](SECURITY.md).
+The container runs as `nobody:users` (99:100) with a read-only root filesystem, no Linux capabilities and `no-new-privileges`. Forgot the admin password? From the Unraid terminal: `docker exec -it deedup deedup reset-password`. For HTTPS on your network, set **HTTPS** to `on` in the template (see Configuration). For access from outside your home, use a VPN or a reverse proxy with HTTPS and set **Trusted proxies**; see [SECURITY.md](SECURITY.md).
 
 **Upgrading from 0.6.0 or earlier:** if you had set the old **Password** (`DEEDUP_PASSWORD`), it becomes the admin password (user name `admin`) on the first start; then remove the variable. Basic auth is gone.
 
@@ -86,6 +89,11 @@ See [`docker-compose.yml`](docker-compose.yml) for a Compose example.
 | `DEEDUP_PORT` | `8080` | Web UI port |
 | `DEEDUP_ADMIN_PASSWORD` | (none) | First run only: creates the admin (user name `admin`). Ignored once an admin exists |
 | `DEEDUP_TRUSTED_PROXIES` | (none) | Comma-separated reverse-proxy addresses or networks whose `X-Forwarded-For`/`-Proto` headers are believed |
+| `DEEDUP_HTTPS` | `off` | `on` serves HTTPS on the web UI port instead of HTTP |
+| `DEEDUP_TLS_CERT`, `DEEDUP_TLS_KEY` | `/config/tls/cert.pem`, `/config/tls/key.pem` | Your certificate (with any intermediates) and its key. If missing or unusable, deedup uses a self-signed certificate in `/config/tls/self-signed.*` |
+| `DEEDUP_TLS_NAMES` | (none) | Comma-separated extra host names and IP addresses for the self-signed certificate, for example `tower.local,192.168.1.10` |
+
+With HTTPS on, open deedup with `https://`; plain `http://` on the same port does not answer. On Unraid, also change the template's **WebUI** link to `https://[IP]:[PORT:8080]/`. The self-signed certificate is valid for about 13 months and is renewed on a container restart within its last 30 days. deedup does not send HSTS: with a self-signed certificate it would make the browser warning impossible to pass.
 
 Everything else is set in the app on the Setup screen.
 

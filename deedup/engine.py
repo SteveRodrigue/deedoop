@@ -35,7 +35,7 @@ from .archive_index import (
     refresh_coverage,
 )
 from .categories import group_category
-from .control import Control, Status
+from .control import Control, Status, fmt_bytes
 from .discovery import natural_key, sync_share_roots
 from .hashing import Expected, FileChanged, full_hash, partial_hash
 from .imaging import IMAGE_HASH_EXTS, MAX_IMAGE_BYTES, NotAnImage, read_and_hash_image, read_image_bytes
@@ -107,6 +107,11 @@ class Scan:
             st.disk(d, state="waiting" if rows else "idle", todo_files=len(rows),
                     todo_bytes=sum(r["size"] for r in rows) if phase in BYTE_PHASES else 0,
                     done_files=0, done_bytes=0, current="")
+        if todo:
+            size = f" ({fmt_bytes(sum(r['size'] for r in todo))})" if phase in BYTE_PHASES else ""
+            st.log("info", f"{len(todo):,} files to read{size} on {sum(1 for r in by_disk.values() if r)} disks")
+        else:
+            st.log("info", "Nothing to read")
         for_each_disk([d for d in disks if by_disk.get(d)], settings,
                       lambda disk: worker(ctx, disk, phase, by_disk.get(disk, []), settings))
         _save_cursor(self.conn, ctx.job_id, {"phase": phase + "_done"})
@@ -120,8 +125,12 @@ def run_scan(ctx: ScanContext) -> dict:
         roots = conn.execute("SELECT * FROM roots WHERE enabled = 1 ORDER BY path").fetchall()
         disks = _disks_in_order(roots)
         st = ctx.status
-        st.set(phase="walk", disks_order=disks, mode=settings["disk_mode"],
-               scanners=scanners.active_keys(settings))
+        on = scanners.active_keys(settings)
+        st.set(phase="walk", disks_order=disks, mode=settings["disk_mode"], scanners=on,
+               plan=scanners.plan(settings))
+        st.log("info", f"{len(roots)} folders on {len(disks)} disks, "
+                       f"{'one disk at a time' if settings['disk_mode'] == 'single' else 'disks in parallel'}; "
+                       f"scanners: {', '.join(scanners.REGISTRY[k].label for k in on) or 'none (raw content only)'}")
         for d in disks:
             st.disk(d, state="waiting")
 
@@ -132,13 +141,16 @@ def run_scan(ctx: ScanContext) -> dict:
             c = db.connect(ctx.db_path)
             try:
                 st.disk(disk, state="walking")
+                files = new = changed = 0
                 for r in roots:
                     if r["disk"] != disk:
                         continue
                     if r["last_scan_job"] == ctx.job_id:
                         continue  # already walked before a restart
-                    walk_root(c, r, ctx.job_id, excluder, ctx.control, st)
+                    res = walk_root(c, r, ctx.job_id, excluder, ctx.control, st)
+                    files, new, changed = files + res.files, new + res.new, changed + res.changed
                 st.disk(disk, state="walked", current="")
+                st.log("info", f"{disk}: {files:,} files, {new:,} new, {changed:,} changed")
             finally:
                 c.close()
 
@@ -206,6 +218,15 @@ def photo_index(scan: Scan) -> None:
     # perceptual hashes for photos indexed before similar matching was on
     if similar:
         scan.run_phase("hash_similar", _similar_candidates(conn, min_size), _hash_disk)
+
+
+def photo_plan(settings: dict) -> set[str]:
+    out = set()
+    if settings["image_matching"] or settings["similar_matching"]:
+        out.add("hash_image")
+    if settings["similar_matching"]:
+        out.add("hash_similar")
+    return out
 
 
 def photo_group(scan: Scan) -> dict:
@@ -427,6 +448,7 @@ def _hash_disk(ctx: ScanContext, disk: str, phase: str, rows: list[sqlite3.Row],
                     )]
             except FileChanged:
                 errors.append(("changed while reading; will retry next scan", row["id"]))
+                st.log("warn", f"{path}: changed while reading; will retry next scan")
                 last_phys = None
                 continue
             except NotAnImage as e:  # too large to hash as an image: exact hashes still follow
@@ -437,6 +459,7 @@ def _hash_disk(ctx: ScanContext, disk: str, phase: str, rows: list[sqlite3.Row],
                 continue
             except OSError as e:
                 errors.append((f"{type(e).__name__}: {e.strerror or e}", row["id"]))
+                st.log("warn", f"{path}: cannot read ({e.strerror or type(e).__name__})")
                 last_phys = None
                 continue
             pending.extend((row["id"], k, v) for k, v in values)

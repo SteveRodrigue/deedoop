@@ -379,6 +379,17 @@ MIGRATIONS: list[str] = [
         DELETE FROM av WHERE file_id = NEW.id;
     END;
     """,
+    # v9: milestone 7.5, the scan log
+    """
+    CREATE TABLE scan_log (
+        id      INTEGER PRIMARY KEY,
+        job_id  INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+        at      REAL NOT NULL,
+        level   TEXT NOT NULL,            -- info, warn, error
+        message TEXT NOT NULL
+    );
+    CREATE INDEX scan_log_job ON scan_log(job_id, id);
+    """,
 ]
 
 DEFAULT_SETTINGS: dict[str, Any] = {
@@ -513,6 +524,27 @@ def enqueue_job(conn: sqlite3.Connection, type_: str, params: dict | None = None
         (type_, json.dumps(params or {}), time.time()),
     )
     return int(cur.lastrowid)
+
+
+LOG_KEEP_JOBS = 30
+
+
+def add_log(conn: sqlite3.Connection, job_id: int, lines: list[tuple[float, str, str]]) -> None:
+    if lines:
+        with Tx(conn):
+            conn.executemany("INSERT INTO scan_log(job_id, at, level, message) VALUES (?, ?, ?, ?)",
+                             [(job_id, at, level, msg) for at, level, msg in lines])
+
+
+def prune_logs(conn: sqlite3.Connection, keep: int = LOG_KEEP_JOBS) -> None:
+    """Keep the logs of the last ``keep`` jobs."""
+    conn.execute("DELETE FROM scan_log WHERE job_id NOT IN (SELECT id FROM jobs ORDER BY id DESC LIMIT ?)", (keep,))
+
+
+def job_log(conn: sqlite3.Connection, job_id: int, warnings_only: bool = False, limit: int = 2000) -> list[sqlite3.Row]:
+    return conn.execute(
+        "SELECT at, level, message FROM scan_log WHERE job_id = ? AND (? = 0 OR level != 'info') ORDER BY id LIMIT ?",
+        (job_id, int(warnings_only), limit)).fetchall()
 
 
 def active_job(conn: sqlite3.Connection) -> sqlite3.Row | None:

@@ -77,7 +77,7 @@ smoke() {
   local probe='import urllib.request as u, urllib.error as e
 base = "http://127.0.0.1:8080"
 for p in ("/healthz", "/login", "/", "/setup", "/duplicates", "/browse", "/review", "/archives", "/reorganize",
-          "/plans", "/changes", "/same-path", "/browse?view=music", "/duplicates?method=media"):
+          "/plans", "/changes", "/same-path", "/browse?view=music", "/duplicates?method=media", "/log"):
     r = u.urlopen(base + p, timeout=4)
     assert r.status == 200, p
     print("  ok", p, "->", r.url.replace(base, ""))
@@ -120,6 +120,37 @@ print("  ok signed-out POST refused")'
   fi
   docker stop -t 5 "$name" >/dev/null || true
   docker container rm "$name" >/dev/null 2>&1 || true
+  [ "$ok" = 1 ] || return 1
+
+  # Built-in HTTPS (milestone 7.5): a self-signed certificate, TLS 1.2+ only, and the healthcheck.
+  local tname="deedup-ci-tls-$$"
+  docker run -d --name "$tname" -e DEEDUP_HTTPS=on --read-only --tmpfs /tmp --tmpfs /config:uid=99,gid=100 \
+    --cap-drop=ALL --security-opt=no-new-privileges --tmpfs /mnt:ro,size=1m "$IMAGE" >/dev/null
+  local tprobe='import ssl, urllib.request as u
+ctx = ssl.create_default_context(); ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE
+assert u.urlopen("https://127.0.0.1:8080/login", timeout=4, context=ctx).status == 200
+old = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT); old.check_hostname = False; old.verify_mode = ssl.CERT_NONE
+old.minimum_version = old.maximum_version = ssl.TLSVersion.TLSv1_1
+try:
+    u.urlopen("https://127.0.0.1:8080/login", timeout=4, context=old)
+    raise SystemExit("TLS 1.1 was accepted")
+except OSError:
+    pass
+print("  ok HTTPS with a self-signed certificate, TLS 1.1 refused")'
+  ok=0
+  for _ in $(seq 1 30); do
+    if docker exec "$tname" python -c "$tprobe" 2>/dev/null; then ok=1; break; fi
+    sleep 1
+  done
+  if [ "$ok" = 1 ]; then
+    docker exec "$tname" python -c "$tprobe"
+    if docker exec "$tname" python -m deedup healthcheck; then echo "  ok healthcheck over HTTPS"; else ok=0; fi
+  else
+    docker logs "$tname" 2>&1 | tail -20
+    echo "HTTPS smoke test failed"
+  fi
+  docker stop -t 5 "$tname" >/dev/null || true
+  docker container rm "$tname" >/dev/null 2>&1 || true
   [ "$ok" = 1 ]
 }
 

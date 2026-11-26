@@ -191,7 +191,32 @@ body[data-readonly] form[method=post]:not([data-public]) button[disabled] { curs
 table.log td { white-space: nowrap; }
 table.log td.detail { white-space: normal; }
 
+/* Milestone 7.5: HTTPS card, scan progress and the scan log. */
+.flash.warn { border: 1px solid var(--warn); color: var(--warn); }
+.warn-text { color: var(--warn); }
+.pill.err { color: var(--err); border-color: var(--err); }
+.nowrap { white-space: nowrap; }
+.fingerprint { font-size: 12px; overflow-wrap: anywhere; }
+label.inline { display: inline-flex; align-items: center; gap: 6px; }
+ol.phases { display: flex; gap: 4px; list-style: none; padding: 0; margin: 10px 0 4px; }
+ol.phases li { flex: 1; height: 8px; border-radius: 4px; background: var(--line); overflow: hidden; position: relative; }
+ol.phases li.done { background: var(--ok); }
+ol.phases li.now span { display: block; height: 100%; background: var(--accent); min-width: 6px; transition: width .6s; }
+.phase-progress { margin: 4px 0 8px; }
+ol.log-tail { list-style: none; margin: 10px 0 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px;
+  font-size: 12.5px; background: var(--bg); display: grid; gap: 2px; }
+ol.log-tail li { display: flex; gap: 8px; min-width: 0; }
+ol.log-tail time { color: var(--muted); flex: none; font-variant-numeric: tabular-nums; }
+ol.log-tail .msg { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+ol.log-tail li.warn .msg { color: var(--warn); }
+ol.log-tail li.error .msg { color: var(--err); }
+table.scan-log td.msg { white-space: normal; overflow-wrap: anywhere; }
+table.scan-log tr.warn td.msg { color: var(--warn); }
+table.scan-log tr.error td.msg { color: var(--err); }
+
 @media (max-width: 640px) {
+  table.scan-log { display: table; }
+  table.scan-log th:nth-child(2), table.scan-log td:nth-child(2) { display: none; }
   .theme { margin-left: 0; }
   .photos { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
   header.top { padding: 10px 16px; gap: 10px; }

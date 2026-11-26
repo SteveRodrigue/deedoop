@@ -4,7 +4,9 @@ Each test names the rule (SC1-SC10) or the audit finding (A1-A12) it guards.
 """
 
 import hashlib
+import logging
 import re
+import ssl
 import time
 from pathlib import Path
 
@@ -12,9 +14,11 @@ import pytest
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
-from deedup import auth, db
+from deedup import auth, db, tls
+from deedup.control import Status
 from deedup.web.app import create_app
 from deedup.web.security import safe_next
+from deedup.worker import JobLogHandler
 from tests.conftest import TEST_PASSWORD, ensure_admin, sign_in
 from tests.test_web import make_client
 
@@ -553,3 +557,49 @@ def test_a_crafted_media_file_cannot_open_other_files(tmp_path):
     concat.write_text(f"ffconcat version 1.0\nfile '{secret}'\n")
     with pytest.raises(RuntimeError):
         av.stream_hash(str(concat), concat.stat().st_size)
+
+
+# -- milestone 7.5: built-in HTTPS and the scan log (SC8) ------------------------
+
+
+def test_scan_log_never_takes_sign_in_messages():
+    """SC8: the sign-in code logs the setup code to the container log; it must
+    never reach the scan log, which signed-out visitors may be able to read."""
+    st = Status()
+    st.reset(job=1)
+    handler = JobLogHandler(st)
+    root = logging.getLogger("deedup")
+    root.addHandler(handler)
+    try:
+        logging.getLogger("deedup.auth").warning("setup code: 123-456")
+        logging.getLogger("deedup.web").warning("something")
+        logging.getLogger("deedup.engine").warning("exiftool not found; skipping metadata")
+    finally:
+        root.removeHandler(handler)
+    msgs = [m for _, _, m in st.drain_log()]
+    assert msgs == ["exiftool not found; skipping metadata"]
+
+
+def test_self_signed_key_is_owner_only(tmp_path):
+    """SC8: the private key is written 0600 and the folder 0700."""
+    info = tls.prepare(_tls_cfg(tmp_path))
+    assert info.key_path.stat().st_mode & 0o777 == 0o600
+    assert info.key_path.parent.stat().st_mode & 0o777 == 0o700
+
+
+def test_https_refuses_old_tls(tmp_path):
+    """SC8: the server context accepts TLS 1.2 and 1.3 only, no weak ciphers."""
+    info = tls.prepare(_tls_cfg(tmp_path))
+    ctx = tls.server_context(info.cert_path, info.key_path)
+    assert ctx.minimum_version == ssl.TLSVersion.TLSv1_2
+    names = {c["name"] for c in ctx.get_ciphers()}
+    assert names and not any(w in n for n in names for w in ("RC4", "3DES", "NULL", "CBC", "MD5"))
+    tls12 = [c for c in ctx.get_ciphers() if c["protocol"] == "TLSv1.2"]
+    assert tls12 and all(c["kea"] in ("kx-ecdhe", "kx-dhe") for c in tls12)
+
+
+def _tls_cfg(tmp_path):
+    from deedup.config import AppConfig
+
+    return AppConfig(config_dir=tmp_path / "config", mnt=tmp_path / "mnt", https=True,
+                     tls_cert=tmp_path / "config/tls/cert.pem", tls_key=tmp_path / "config/tls/key.pem")

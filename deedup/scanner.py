@@ -134,8 +134,9 @@ def walk_root(
             try:
                 with os.scandir(abs_dir) as it:
                     entries = list(it)
-            except OSError:
+            except OSError as e:
                 res.unreadable_dirs += 1
+                status.log("warn", f"{abs_dir}: cannot open folder ({e.strerror or type(e).__name__})")
                 w.touch_dirs.append(rel_dir)
                 continue
             known = {

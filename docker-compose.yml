@@ -18,4 +18,5 @@ services:
     # environment:
     #   DEEDUP_ADMIN_PASSWORD: a long passphrase   # first run only; otherwise use the setup code in the log
     #   DEEDUP_TRUSTED_PROXIES: 172.18.0.0/16      # only behind a reverse proxy
+    #   DEEDUP_HTTPS: "on"                         # HTTPS on port 8080: your cert in appdata/deedup/tls, or self-signed
     restart: unless-stopped

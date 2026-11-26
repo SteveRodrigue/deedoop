@@ -93,6 +93,8 @@ def archive_disk(ctx, disk: str, phase: str, rows: list[sqlite3.Row], settings: 
                 members, error = [], str(e)
             except Exception as e:  # noqa: BLE001 - a damaged archive must not stop the scan
                 members, error = [], f"{type(e).__name__}: {e}"[:300]
+            if error:
+                st.log("warn", f"{path}: {error}")
             store_archive(conn, row, members, ctx.job_id, error)
             st.add(disk, "done_bytes", row["size"])
             st.add(disk, "done_files", 1)
