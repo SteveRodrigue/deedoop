@@ -1,6 +1,6 @@
-# Contributing to deedup
+# Contributing to deedoop
 
-Thanks for helping. A few things keep deedup safe for people's backups.
+Thanks for helping. A few things keep deedoop safe for people's backups.
 
 ## Before you push
 
@@ -16,9 +16,9 @@ make ci      # the full run GitHub does: tests in Docker, pip-audit, image build
 Read [docs/secure-coding.md](docs/secure-coding.md). In short:
 
 1. **SC1** Changes are `POST`, behind the sign-in and CSRF guard; `GET` never writes.
-2. **SC2** Files on `/mnt` only through `deedup.safepath`.
+2. **SC2** Files on `/mnt` only through `deedoop.safepath`.
 3. **SC3** No shell; ExifTool gets checked arguments only.
-4. **SC4** Archives are read, never extracted, within `deedup.limits`.
+4. **SC4** Archives are read, never extracted, within `deedoop.limits`.
 5. **SC5** SQL takes `?` parameters.
 6. **SC6** Templates escape; no inline scripts.
 7. **SC7** Every input typed and bounded; redirects local only.

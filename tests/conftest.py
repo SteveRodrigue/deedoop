@@ -3,10 +3,10 @@ from pathlib import Path
 
 import pytest
 
-from deedup import db
-from deedup.config import AppConfig
-from deedup.control import Control, Status
-from deedup.engine import ScanContext, run_scan
+from deedoop import db
+from deedoop.config import AppConfig
+from deedoop.control import Control, Status
+from deedoop.engine import ScanContext, run_scan
 
 
 def write(p: Path, data: bytes, mtime: float | None = None) -> Path:
@@ -52,7 +52,7 @@ TEST_PASSWORD = "correct horse battery staple"
 
 
 def ensure_admin(cfg: AppConfig) -> None:
-    from deedup import auth
+    from deedoop import auth
 
     c = db.connect(cfg.db_path)
     try:

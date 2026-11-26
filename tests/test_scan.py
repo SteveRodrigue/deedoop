@@ -1,9 +1,9 @@
 import os
 import time
 
-from deedup import db
-from deedup.control import Control, Stopped
-from deedup.hashing import EDGE
+from deedoop import db
+from deedoop.control import Control, Stopped
+from deedoop.hashing import EDGE
 from tests.conftest import scan, write
 
 
@@ -76,7 +76,7 @@ def test_hardlinks_are_one_copy(unraid, conn):
 
 
 def test_rescan_is_incremental(unraid, conn, monkeypatch):
-    from deedup import engine
+    from deedoop import engine
 
     m = unraid.mnt
     data = os.urandom(400_000)

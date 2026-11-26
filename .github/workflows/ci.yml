@@ -33,7 +33,11 @@ jobs:
         if: github.event_name == 'push'
         run: |
           version=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
-          for tag in latest "$version"; do
-            docker tag deedup:ci "ghcr.io/steverodrigue/deedup:$tag"
-            docker push "ghcr.io/steverodrigue/deedup:$tag"
+          # The image is also pushed under its old name, deedup, so installs from
+          # before the rename keep getting updates until they switch.
+          for name in deedoop deedup; do
+            for tag in latest "$version"; do
+              docker tag deedoop:ci "ghcr.io/steverodrigue/$name:$tag"
+              docker push "ghcr.io/steverodrigue/$name:$tag"
+            done
           done

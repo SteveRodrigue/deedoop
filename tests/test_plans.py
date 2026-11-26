@@ -2,8 +2,8 @@ import os
 
 import pytest
 
-from deedup import db, plans, queries
-from deedup.discovery import add_custom_root
+from deedoop import db, plans, queries
+from deedoop.discovery import add_custom_root
 from tests.conftest import scan, write
 
 

@@ -21,7 +21,7 @@ lock:   ## regenerate requirements.lock with hashes after changing dependencies 
 	  --python-platform x86_64-manylinux_2_28 --no-header -o requirements.lock
 
 image:
-	docker build -t deedup:dev .
+	docker build -t deedoop:dev .
 
 smoke: image  ## start the image against an empty /mnt and load every page
-	IMAGE=deedup:dev bash scripts/ci.sh smoke
+	IMAGE=deedoop:dev bash scripts/ci.sh smoke

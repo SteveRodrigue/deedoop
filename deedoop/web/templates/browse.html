@@ -1,0 +1,163 @@
+{% extends "base.html" %}
+{% block title %}Browse · deedoop{% endblock %}
+{% block content %}
+{% if not locs %}
+<section class="card"><p class="muted">Nothing indexed yet. Pick shares on <a href="/setup">Setup</a> and run a scan.</p></section>
+{% else %}
+<section class="card">
+  <form method="get" action="/browse" class="row filters">
+    <select name="loc" data-change="reset-dir submit">
+      {% for l in locs %}<option value="{{ l.key }}" {{ "selected" if l.key == loc }}>{{ l.label }}</option>{% endfor %}
+    </select>
+    <input type="hidden" name="dir" value="{{ flt.dir }}">
+    <input type="search" name="q" value="{{ flt.q }}" placeholder="Name contains…">
+    <select name="kind">
+      <option value="">All types</option>
+      {% for c in categories %}<option value="{{ c }}" {{ "selected" if flt.kind == c }}>{{ c }}</option>{% endfor %}
+    </select>
+    <select name="year">
+      <option value="">Any year taken</option>
+      {% for y in facets.years %}<option {{ "selected" if flt.year == y }}>{{ y }}</option>{% endfor %}
+    </select>
+    <select name="camera">
+      <option value="">Any camera</option>
+      {% for c in facets.cameras %}<option {{ "selected" if flt.camera == c }}>{{ c }}</option>{% endfor %}
+    </select>
+    {% if media_on and view != "music" %}
+    <select name="artist" aria-label="Artist">
+      <option value="">Any artist</option>
+      {% for a in facets.artists %}<option {{ "selected" if flt.artist == a }}>{{ a }}</option>{% endfor %}
+    </select>
+    <select name="codec" aria-label="Codec">
+      <option value="">Any codec</option>
+      {% for c in facets.codecs %}<option {{ "selected" if flt.codec == c }}>{{ c }}</option>{% endfor %}
+    </select>
+    <select name="length" aria-label="Length">
+      <option value="">Any length</option>
+      {% for k, v in facets.lengths.items() %}<option value="{{ k }}" {{ "selected" if flt.length == k }}>{{ v[0] }}</option>{% endfor %}
+    </select>
+    {% if flt.album %}<input type="hidden" name="album" value="{{ flt.album }}">{% endif %}
+    {% endif %}
+    <label class="radio small"><input type="checkbox" name="no_gps" value="1" {{ "checked" if flt.no_gps }}> No GPS</label>
+    <label class="radio small"><input type="checkbox" name="no_date" value="1" {{ "checked" if flt.no_date }}> No date taken</label>
+    <label class="radio small"><input type="checkbox" name="dups" value="1" {{ "checked" if flt.dups }}> Duplicates only</label>
+    <select name="view">
+      <option value="list" {{ "selected" if view != "grid" }}>List</option>
+      <option value="grid" {{ "selected" if view == "grid" }}>Thumbnails</option>
+      {% if audio_on %}<option value="music" {{ "selected" if view == "music" }}>Music</option>{% endif %}
+    </select>
+    <button>Apply</button>
+    {% if flt.flat %}<a href="/browse?loc={{ loc | urlencode }}&dir={{ flt.dir | urlencode }}">Clear filters</a>{% endif %}
+  </form>
+  <nav class="crumbs">
+    <a href="/browse?loc={{ loc | urlencode }}{{ '&' ~ filters if filters }}">{{ res.base }}</a>
+    {% for name, path in crumbs %}<span class="sep">/</span>
+      <a href="/browse?loc={{ loc | urlencode }}&dir={{ path | urlencode }}{{ '&' ~ filters if filters }}">{{ name }}</a>{% endfor %}
+  </nav>
+  {% set reorg = "/reorganize?loc=" ~ (loc | urlencode) ~ "&dir=" ~ (flt.dir | urlencode) ~ ("&" ~ filters if filters else "") %}
+  {% if view == "music" %}
+  <p class="small muted">Songs in this folder and below, by artist and album, from their tags.
+    {% if artist %}<a href="/browse?loc={{ loc | urlencode }}&dir={{ flt.dir | urlencode }}&view=music">All artists</a>{% endif %}</p>
+  {% elif flt.flat %}
+  <p class="small muted">{{ "{:,}".format(res.total) }} files match in this folder and below.
+    {% if res.total %}<a href="{{ reorg }}">Reorganize these files</a>{% endif %}</p>
+  {% else %}
+    {% if res.subdirs %}
+    <div class="folders">
+      {% for d in res.subdirs %}
+      <a href="/browse?loc={{ loc | urlencode }}&dir={{ ((flt.dir ~ '/') if flt.dir) ~ d | urlencode }}{{ '&' ~ filters if filters }}">📁 {{ d }}</a>
+      {% endfor %}
+    </div>
+    {% endif %}
+    <p class="small muted">{{ "{:,}".format(res.total) }} files in this folder.
+      <a href="{{ reorg }}">Reorganize this folder and below</a></p>
+  {% endif %}
+</section>
+
+{% if music %}
+{% set mbase = "/browse?loc=" ~ (loc | urlencode) ~ "&dir=" ~ (flt.dir | urlencode) ~ "&view=music" %}
+{% if not artist %}
+<section class="card">
+  <h2>Artists</h2>
+  {% if music.artists %}
+  <div class="artists">
+    {% for a in music.artists %}
+    <div class="artist">
+      <a href="{{ mbase }}&artist={{ (a.name or '(no artist)') | urlencode }}">{{ a.name or "(no artist)" }}</a>
+      <div class="muted small">{{ a.albums }} album{{ "s" if a.albums != 1 }} · {{ a.tracks }} track{{ "s" if a.tracks != 1 }} · {{ a.bytes | bytes }}</div>
+      {% if a.dups %}<div><span class="pill warn">{{ a.dups }} duplicate{{ "s" if a.dups != 1 }}</span></div>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}<p class="muted">No songs with readable tags here yet. The audio scanner reads them during the next scan.</p>{% endif %}
+</section>
+{% else %}
+<h2 style="margin:4px 0 12px">{{ artist }}</h2>
+{% for al in music.albums %}
+<section class="card album">
+  <h3>{{ al.name or "(no album)" }}{% if al.year %} <span class="muted small">{{ al.year }}</span>{% endif %}</h3>
+  <table>
+    <thead><tr><th class="num">#</th><th>Title</th><th class="num">Length</th><th>Codec</th><th class="num">Size</th><th></th></tr></thead>
+    {% for t in al.tracks %}
+    <tr>
+      <td class="num muted">{{ t.track or "" }}</td>
+      <td class="path" title="{{ t.user_path }}"><a href="/file/{{ t.id }}">{{ t.title or t.name }}</a></td>
+      <td class="num">{{ t.length or "" }}</td>
+      <td class="small">{{ t.codecs or "" }}</td>
+      <td class="num">{{ t.size | bytes }}</td>
+      <td>{% if t.in_group %}<span class="pill warn">duplicate</span>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</section>
+{% else %}
+<section class="card"><p class="muted">No songs by this artist here.</p></section>
+{% endfor %}
+{% endif %}
+{% elif res.files %}
+{% if view == "grid" %}
+<section class="photos">
+  {% for f in res.files %}
+  <div class="photo">
+    <a href="/file/{{ f.id }}">{% if f.thumb %}<img class="thumb m" loading="lazy" src="/thumb/{{ f.id }}" alt="">{% else %}<div class="thumb m"></div>{% endif %}</a>
+    <div class="meta">
+      <div title="{{ f.user_path }}"><a href="/file/{{ f.id }}">{{ f.name }}</a></div>
+      <div class="muted">{{ f.taken_at or (f.mtime | time) }}</div>
+      {% if f.in_group %}<div><span class="pill warn">duplicate</span></div>{% endif %}
+    </div>
+  </div>
+  {% endfor %}
+</section>
+{% else %}
+<section class="card">
+  <table>
+    <thead><tr><th></th><th>Name</th>{% if flt.flat %}<th>Folder</th>{% endif %}<th class="num">Size</th><th>Taken</th><th>Camera or artist</th><th>Resolution or length</th><th>GPS</th><th>Disk</th><th></th></tr></thead>
+    {% for f in res.files %}
+    <tr>
+      <td>{% if f.thumb %}<img class="thumb s" loading="lazy" src="/thumb/{{ f.id }}?s=160" alt="">{% endif %}</td>
+      <td class="path" title="{{ f.user_path }}"><a href="/file/{{ f.id }}">{{ f.name }}</a></td>
+      {% if flt.flat %}<td class="path muted small" title="{{ f.dir }}">{{ f.dir or "/" }}</td>{% endif %}
+      <td class="num">{{ f.size | bytes }}</td>
+      <td class="small">{{ f.taken_at or "" }}</td>
+      <td class="small">{% if f.artist %}{{ f.artist }}{% if f.album %} · <span class="muted">{{ f.album }}</span>{% endif %}{% else %}{{ f.camera or "" }}{% endif %}</td>
+      <td class="small">{{ f.dims or "" }}{% if f.length %}{{ " · " if f.dims }}{{ f.length }}{% endif %}{% if f.codecs %} <span class="muted">{{ f.codecs }}</span>{% endif %}</td>
+      <td class="small">{{ "yes" if f.gps else "" }}</td>
+      <td class="small muted">{{ f.disk }}</td>
+      <td>{% if f.in_group %}<span class="pill warn">duplicate</span>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</section>
+{% endif %}
+{% endif %}
+
+{% if pages > 1 %}
+<nav class="pager">
+  {% set base = "/browse?loc=" ~ (loc | urlencode) ~ "&dir=" ~ (flt.dir | urlencode) ~ ("&" ~ filters if filters else "") %}
+  {% if flt.page > 1 %}<a href="{{ base }}&page={{ flt.page - 1 }}">← Previous</a>{% endif %}
+  <span>Page {{ flt.page }} of {{ pages }}</span>
+  {% if flt.page < pages %}<a href="{{ base }}&page={{ flt.page + 1 }}">Next →</a>{% endif %}
+</nav>
+{% endif %}
+{% endif %}
+{% endblock %}

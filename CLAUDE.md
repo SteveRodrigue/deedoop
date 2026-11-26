@@ -1,6 +1,6 @@
-# deedup: notes for Claude and other AI agents
+# deedoop: notes for Claude and other AI agents
 
-deedup is a duplicate finder for Unraid (Python 3.12, FastAPI + Jinja + htmx,
+deedoop is a duplicate finder for Unraid (Python 3.12, FastAPI + Jinja + htmx,
 SQLite). It can move and delete files on someone's array, so security rules
 are not optional.
 
@@ -9,15 +9,17 @@ are not optional.
 - Follow the secure coding rules in [docs/secure-coding.md](docs/secure-coding.md)
   (SC1 to SC10) and cite the rule id in comments where it explains a choice.
 - Run `make check` while working and `make ci` before every push. Both must pass.
-- New state-changing routes are `POST`; the guard in `deedup/web/security.py`
+- New state-changing routes are `POST`; the guard in `deedoop/web/security.py`
   covers them. Add `{% include "_csrf.html" %}` to every `<form method="post">`.
-- File changes on `/mnt` only through `deedup/safepath.py`.
-- Archives are never extracted; use `deedup/limits.py` budgets.
+- File changes on `/mnt` only through `deedoop/safepath.py`.
+- Archives are never extracted; use `deedoop/limits.py` budgets.
 - SQL uses `?` placeholders for every value.
 - No inline `<script>` or `on…=` attributes in templates; put behaviour in
   `static/app.js`.
 - Every security fix ships with a test that fails without it.
 - Every screen works in light and dark themes and on a phone.
+- Brand: Ledger palette and the deedoop logo (second e and o in the greyed `--copy` tone).
+  Design explorations live in `branding/`, which is gitignored: keep design work there.
 
 ## Never
 
@@ -29,17 +31,17 @@ are not optional.
 
 ## Layout
 
-- `deedup/web/app.py` routes; `deedup/web/security.py` guard and headers;
-  `deedup/auth.py` accounts, sessions, throttling.
-- `deedup/changes.py` removals and moves (M6); `deedup/safepath.py` the only
+- `deedoop/web/app.py` routes; `deedoop/web/security.py` guard and headers;
+  `deedoop/auth.py` accounts, sessions, throttling.
+- `deedoop/changes.py` removals and moves (M6); `deedoop/safepath.py` the only
   filesystem writes.
-- `deedup/archives.py` + `deedup/limits.py` archive reading.
-- `deedup/metadata.py` ExifTool and `deedup/av.py` ffprobe/ffmpeg (the only subprocesses).
-- `deedup/media_similar.py` re-encoded songs and videos (M8): fingerprints,
+- `deedoop/archives.py` + `deedoop/limits.py` archive reading.
+- `deedoop/metadata.py` ExifTool and `deedoop/av.py` ffprobe/ffmpeg (the only subprocesses).
+- `deedoop/media_similar.py` re-encoded songs and videos (M8): fingerprints,
   pairs, review decisions.
-- `deedup/tls.py` built-in HTTPS (your certificate or a self-signed one);
-  `deedup/control.py` progress, ETA and the scan log lines.
-- `deedup/scanners.py` the scanner registry: photo, video, audio and archive
+- `deedoop/tls.py` built-in HTTPS (your certificate or a self-signed one);
+  `deedoop/control.py` progress, ETA and the scan log lines.
+- `deedoop/scanners.py` the scanner registry: photo, video, audio and archive
   analysis are plugins an admin can turn off. A new kind of analysis is a new
   `Scanner` row with hooks, never an `if` in the engine.
 - `tests/test_security.py` the security tests, named by rule and finding.

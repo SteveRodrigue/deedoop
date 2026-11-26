@@ -1,13 +1,13 @@
-# Example for running deedup outside the Unraid template.
+# Example for running deedoop outside the Unraid template.
 services:
-  deedup:
-    image: ghcr.io/steverodrigue/deedup:latest
-    container_name: deedup
+  deedoop:
+    image: ghcr.io/steverodrigue/deedoop:latest
+    container_name: deedoop
     ports:
       - "8080:8080"
     volumes:
-      - /mnt:/mnt:ro,rslave          # read-only: deedup never changes your files
-      - /mnt/user/appdata/deedup:/config
+      - /mnt:/mnt:ro,rslave          # read-only: deedoop never changes your files
+      - /mnt/user/appdata/deedoop:/config
     # Locked down: nothing in the image can be changed, no Linux capabilities.
     read_only: true
     tmpfs:
@@ -16,7 +16,7 @@ services:
     security_opt:
       - no-new-privileges:true
     # environment:
-    #   DEEDUP_ADMIN_PASSWORD: a long passphrase   # first run only; otherwise use the setup code in the log
-    #   DEEDUP_TRUSTED_PROXIES: 172.18.0.0/16      # only behind a reverse proxy
-    #   DEEDUP_HTTPS: "on"                         # HTTPS on port 8080: your cert in appdata/deedup/tls, or self-signed
+    #   DEEDOOP_ADMIN_PASSWORD: a long passphrase   # first run only; otherwise use the setup code in the log
+    #   DEEDOOP_TRUSTED_PROXIES: 172.18.0.0/16      # only behind a reverse proxy
+    #   DEEDOOP_HTTPS: "on"                         # HTTPS on port 8080: your cert in appdata/deedoop/tls, or self-signed
     restart: unless-stopped

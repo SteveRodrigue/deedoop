@@ -7,8 +7,8 @@ import time
 import pytest
 from PIL import Image
 
-from deedup import db
-from deedup.imaging import NotAnImage, jpeg_data_hash, pixel_hash
+from deedoop import db
+from deedoop.imaging import NotAnImage, jpeg_data_hash, pixel_hash
 from tests.conftest import scan, write
 
 needs_exiftool = pytest.mark.skipif(shutil.which("exiftool") is None, reason="exiftool not installed")

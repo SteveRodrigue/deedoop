@@ -15,7 +15,7 @@ anyio==4.16.0 \
 argon2-cffi==25.1.0 \
     --hash=sha256:694ae5cc8a42f4c4e2bf2ca0e64e51e23a040c6a517a85074683d3959e1346c1 \
     --hash=sha256:fdc8b074db390fccb6eb4a3604ae7231f219aa669a2652e0f20e16ba513d5741
-    # via deedup (pyproject.toml)
+    # via deedoop (pyproject.toml)
 argon2-cffi-bindings==26.2.0 \
     --hash=sha256:02086528488a85d374655e2f2f83fea03f49764587ac49d8e10bf6471df9f163 \
     --hash=sha256:0605c024d02be0896112f4dc90a896df69464c634ec578ef6b0fe6caf9777e69 \
@@ -253,7 +253,7 @@ blake3==1.0.11 \
     --hash=sha256:fa324f8aa4e6f8a44c2b77c05d8f4296bf4ba430c5b7283f18c6878e18637f56 \
     --hash=sha256:fdb80a774cb0a440fcb62c9f64a64662c740c5bca985f78e70a3aa787264cc41 \
     --hash=sha256:fe624bb87ee53d9770bec087631d7fd8f01eab0128693b8fe6b884d8c2cf0989
-    # via deedup (pyproject.toml)
+    # via deedoop (pyproject.toml)
 brotli==1.2.1 \
     --hash=sha256:0023348c448140a6ea71615eba331835c971d38ae8acf8a89b4e963b1f38f131 \
     --hash=sha256:00a50d063aae2e69c2eb28818ccf6dc3e51f2ea5b74e3c2082a47943ee23f399 \
@@ -567,11 +567,11 @@ cryptography==50.0.2 \
     --hash=sha256:f9f6143a8c75945eb960d9eb98905a441394abfa24afaae239d514ffb2586480 \
     --hash=sha256:fa8f5efb344d6908a1ce62f4a24e2e5780f825d6f53f5f50ec5ffacac72936cb \
     --hash=sha256:fdd28f912fccfec1846a94e2e1e8f9b0012f557f0c46fe4f3eb0d7a87afcf90b
-    # via deedup (pyproject.toml)
+    # via deedoop (pyproject.toml)
 fastapi==0.165.0 \
     --hash=sha256:896f48462042bb4f162147eb8fac7e858753dc1f486765709baf105d70e4fc5b \
     --hash=sha256:dd94d4128319c1e1d50535ab023ab698f850a4d2822f0e181747b46f4ff3c0ab
-    # via deedup (pyproject.toml)
+    # via deedoop (pyproject.toml)
 h11==0.16.0 \
     --hash=sha256:4e35b956cf45792e4caa5885e69fba00bdbc6ffafbfa020300e549b208ee5ff1 \
     --hash=sha256:63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86
@@ -656,7 +656,7 @@ inflate64==1.0.4 \
 jinja2==3.1.6 \
     --hash=sha256:0137fb05990d35f1275a587e9aee6d56da821fc83491a0fb838183be43f66d6d \
     --hash=sha256:85ece4451f492d0c13c5dd7c13a64681a86afae63a5f347908daf103ce6d2f67
-    # via deedup (pyproject.toml)
+    # via deedoop (pyproject.toml)
 markupsafe==3.0.4 \
     --hash=sha256:007e1ffd9bf65bb6ee96df7b258fc632a4868dd5566037986c64781f35a36e98 \
     --hash=sha256:02fa4acbc6a3fc5c693c34d4dd8c1130b7fe99cc915181b0ddd6f72aeb296002 \
@@ -881,7 +881,7 @@ numpy==2.5.5 \
     --hash=sha256:f82a7567c590ff266f8c18fd527a0662edde074de11be256541a656e274f2b05 \
     --hash=sha256:fd47c92e0d1e53f9498b1a30305072434fbae6b5a305cbcab514f959e9ce0fab \
     --hash=sha256:ff5c1ab54a637c0adcdbb69ad10e5c4f1c4dedba69c0d1de383249b70c36908f
-    # via deedup (pyproject.toml)
+    # via deedoop (pyproject.toml)
 opentelemetry-api==1.45.2 \
     --hash=sha256:2cbd737377e710ee740d261c94e93fa0f08e6d037c18f17513cc0a2d94479a34 \
     --hash=sha256:d7b0008e21e5fd61cbe7a7f34ca3b6905a78ab677d9bc395e299359c75cda6b4
@@ -971,7 +971,7 @@ pillow==13.0.0 \
     --hash=sha256:ff3fe9eb621fbb9db4c4be33ab946f6bac5f98ab50ca8d3260503653656c961b \
     --hash=sha256:ffea6b2986a797c84b6d1d27d4f43e0b83c73fc16281a930891cd237cf0d08fe
     # via
-    #   deedup (pyproject.toml)
+    #   deedoop (pyproject.toml)
     #   pillow-heif
 pillow-heif==1.9.0 \
     --hash=sha256:000b51375fa39771de6627d8c397419e513efba63df89f10bc17673696c7c66a \
@@ -1041,7 +1041,7 @@ pillow-heif==1.9.0 \
     --hash=sha256:f2ce1549f7cf99852882c80b484279997ee5a231197ca94f9147051618e1b4a6 \
     --hash=sha256:f5b0600477dcac2acf7126e5ebf577b6a18dc27a9adb903d710afbe82952be60 \
     --hash=sha256:f66f56973d61ef5f247a1d03a2c14fdd6263c52d254eec6cbe4817ae6492ce7d
-    # via deedup (pyproject.toml)
+    # via deedoop (pyproject.toml)
 psutil==7.2.2 \
     --hash=sha256:0746f5f8d406af344fd547f1c8daa5f5c33dbc293bb8d6a16d80b4bb88f59372 \
     --hash=sha256:076a2d2f923fd4821644f5ba89f059523da90dc9014e85f8e45a5774ca5bc6f9 \
@@ -1068,7 +1068,7 @@ psutil==7.2.2 \
 py7zr==1.1.4 \
     --hash=sha256:7674697559bd06b697bf6e8249985cee6dc704a4b07b8e11f24d0b1695707c3e \
     --hash=sha256:f6f868a457a6bd485b78d26e619045718bcd0b7720a6bf97d5fe86a1523423e8
-    # via deedup (pyproject.toml)
+    # via deedoop (pyproject.toml)
 pybcj==1.0.8 \
     --hash=sha256:0074af187b1acce9e31717fc9aa42bc36b67f1a44088a8b44f4f4792af688ee6 \
     --hash=sha256:0657c9534d480a43b11743cad4209d140d09d417adaf19213ff395686ed08812 \
@@ -1328,7 +1328,7 @@ pydantic-core==2.50.5 \
 pyexiftool==0.5.6 \
     --hash=sha256:22a972c1c212d1ad5f61916fded5057333dcc48fb8e42eed12d2ff9665b367ae \
     --hash=sha256:ac7d7836d2bf373f20aa558528f6b2222c4c0d896ed28c951a3ff8e6cec05a87
-    # via deedup (pyproject.toml)
+    # via deedoop (pyproject.toml)
 pyppmd==1.3.1 \
     --hash=sha256:011f845de195d60fe973a635a1f4be981b7d80f357a8acb1b2d83bdf5087c808 \
     --hash=sha256:017a1e2903f1c3147a1046db486990d401e8a25eb52c320b1fc2fb3e7b83cbeb \
@@ -1395,7 +1395,7 @@ pyppmd==1.3.1 \
 python-multipart==0.0.34 \
     --hash=sha256:b998ae90ca6e1e363261ce2e0e230281b8af53867b757970abd69ee9edcd843a \
     --hash=sha256:ebacd224bd686eee2f9aa1066a657affe07435a185834e05e5235e2e59173e91
-    # via deedup (pyproject.toml)
+    # via deedoop (pyproject.toml)
 starlette==1.10.0 \
     --hash=sha256:478c0ab3b4ced6e82719849c118fa406f0278a3499c1a898cd15cd31bdc38ce4 \
     --hash=sha256:b8399098d4c1e3522734f7235dc79b1fc967f96cf139c81e0fa30479e0685f9b
@@ -1424,7 +1424,7 @@ typing-inspection==0.4.5 \
 uvicorn==0.54.0 \
     --hash=sha256:505bdb0f318731d45f1f712071fc781a8981f6847a31c902c9f5e652d4f67faf \
     --hash=sha256:a2e33cbfaa0306f8e6b0c13e0cb89d7d7a2da3e62b90c66e18c33d9807b28620
-    # via deedup (pyproject.toml)
+    # via deedoop (pyproject.toml)
 xxhash==4.1.0 \
     --hash=sha256:007b639130c0c9c6b3b7b8e1862470f14a30645d4436f96bf8c666958001ceb8 \
     --hash=sha256:00e2042a0899f2fa573881b022448c9ef73992fc94400099f920f48d9fb63414 \
@@ -1650,4 +1650,4 @@ xxhash==4.1.0 \
     --hash=sha256:fe8cc6dc9db14679b7363a9df7e23889325da5ad6eaf6ce2e651a0e62eaf1dc6 \
     --hash=sha256:fec2dc6ea3df6f506a438c07ef2dd9e6bd1fe3b375a9ba7f2030b775998678f1 \
     --hash=sha256:ffec5e9139b972051065cb58a3e74914d8a7f70c3bc9c23e03909df22c88dc30
-    # via deedup (pyproject.toml)
+    # via deedoop (pyproject.toml)

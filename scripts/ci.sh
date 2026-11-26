@@ -13,7 +13,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 DOCKERFILE=${DOCKERFILE:-Dockerfile}
-IMAGE=${IMAGE:-deedup:ci}
+IMAGE=${IMAGE:-deedoop:ci}
 TRIVY=${TRIVY:-1}
 # Extra options for docker build / docker run, for machines behind a proxy.
 read -r -a BUILD_OPTS <<< "${BUILD_OPTS:-}"
@@ -69,7 +69,7 @@ full() {
 
 smoke() {
   step "smoke test"
-  local name="deedup-ci-$$"
+  local name="deedoop-ci-$$"
   # An empty, read-only /mnt is enough to start the app and render every page.
   # Locked down as the Unraid template runs it.
   docker run -d --name "$name" --read-only --tmpfs /tmp --tmpfs /config:uid=99,gid=100 \
@@ -124,8 +124,8 @@ print("  ok signed-out POST refused")'
   [ "$ok" = 1 ] || return 1
 
   # Built-in HTTPS (milestone 7.5): a self-signed certificate, TLS 1.2+ only, and the healthcheck.
-  local tname="deedup-ci-tls-$$"
-  docker run -d --name "$tname" -e DEEDUP_HTTPS=on --read-only --tmpfs /tmp --tmpfs /config:uid=99,gid=100 \
+  local tname="deedoop-ci-tls-$$"
+  docker run -d --name "$tname" -e DEEDOOP_HTTPS=on --read-only --tmpfs /tmp --tmpfs /config:uid=99,gid=100 \
     --cap-drop=ALL --security-opt=no-new-privileges --tmpfs /mnt:ro,size=1m "$IMAGE" >/dev/null
   local tprobe='import ssl, urllib.request as u
 ctx = ssl.create_default_context(); ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE
@@ -145,7 +145,7 @@ print("  ok HTTPS with a self-signed certificate, TLS 1.1 refused")'
   done
   if [ "$ok" = 1 ]; then
     docker exec "$tname" python -c "$tprobe"
-    if docker exec "$tname" python -m deedup healthcheck; then echo "  ok healthcheck over HTTPS"; else ok=0; fi
+    if docker exec "$tname" python -m deedoop healthcheck; then echo "  ok healthcheck over HTTPS"; else ok=0; fi
   else
     docker logs "$tname" 2>&1 | tail -20
     echo "HTTPS smoke test failed"

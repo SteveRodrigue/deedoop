@@ -1,4 +1,4 @@
-deedup
+deedoop
 Copyright 2026 Steve Rodrigue
 
 This product is licensed under the Apache License, Version 2.0 (see LICENSE).
@@ -19,4 +19,7 @@ Ideas borrowed, with thanks (no code copied):
 
 Bundled third-party software:
   - htmx 2.0.4 (https://htmx.org), Zero-Clause BSD licence,
-    in deedup/web/static/htmx.min.js.
+    in deedoop/web/static/htmx.min.js.
+  - IBM Plex Sans and IBM Plex Mono (https://github.com/IBM/plex),
+    SIL Open Font License 1.1 (see deedoop/web/static/fonts/OFL.txt),
+    latin subsets in deedoop/web/static/fonts/.

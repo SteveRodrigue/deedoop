@@ -4,9 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from deedup import changes, db, plans, queries
-from deedup.control import Control, Status
-from deedup.discovery import add_custom_root
+from deedoop import changes, db, plans, queries
+from deedoop.control import Control, Status
+from deedoop.discovery import add_custom_root
 from tests.conftest import scan, write
 from tests.test_similar import photos  # noqa: F401  (fixture)
 
@@ -63,13 +63,13 @@ def test_quarantine_undo_and_purge(unraid, conn, dups):
     assert changes.marks_summary(conn)["files"] == 0  # the marks became the action
     res = run(unraid, aid)
     assert res["done"] == 1
-    q = m / f"disk2/Photos/.deedup-quarantine/{aid}/old/a copy.bin"
+    q = m / f"disk2/Photos/.deedoop-quarantine/{aid}/old/a copy.bin"
     assert q.read_bytes() == DATA and not (m / "disk2/Photos/old/a copy.bin").exists()
     assert (m / "disk1/Photos/keep/a.bin").read_bytes() == DATA
     assert exact_groups(conn) == 0
     scan(unraid)  # the quarantine is never indexed
     assert exact_groups(conn) == 0
-    assert conn.execute("SELECT COUNT(*) FROM files WHERE dir LIKE '%deedup-quarantine%'").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM files WHERE dir LIKE '%deedoop-quarantine%'").fetchone()[0] == 0
 
     a = changes.get_action(conn, aid)
     assert a["can_undo"] and a["quarantined"] == 1
@@ -83,7 +83,7 @@ def test_quarantine_undo_and_purge(unraid, conn, dups):
     aid = changes.create_removal(conn, m, "quarantine")
     run(unraid, aid)
     run(unraid, aid, changes.run_purge)
-    assert not (m / "disk2/Photos/.deedup-quarantine").exists()
+    assert not (m / "disk2/Photos/.deedoop-quarantine").exists()
     assert changes.get_action(conn, aid)["can_undo"] is False
 
 
@@ -179,7 +179,7 @@ def test_apply_plan_and_undo(unraid, conn):
     assert run(unraid, aid)["done"] == 1
     assert (m / f"user/Photos/{year}/e.jpg").read_bytes() == b"e" * 3000
     assert not (m / "disks/usb/Backup/e.jpg").exists()
-    assert (m / f"disks/usb/Backup/.deedup-quarantine/{aid}/e.jpg").exists()
+    assert (m / f"disks/usb/Backup/.deedoop-quarantine/{aid}/e.jpg").exists()
     run(unraid, aid, changes.run_undo)
     assert (m / "disks/usb/Backup/e.jpg").exists() and not (m / f"user/Photos/{year}/e.jpg").exists()
 
@@ -236,7 +236,7 @@ def test_pages(unraid, conn, dups):
 
 
 def test_review_decisions_become_marks(unraid, conn, photos):  # noqa: F811
-    from deedup import similar
+    from deedoop import similar
 
     scan(unraid)
     pair = similar.queue(conn, 8)[0]
@@ -248,3 +248,43 @@ def test_review_decisions_become_marks(unraid, conn, photos):  # noqa: F811
     # bulk marking leaves similar groups to Review
     gids = [g["id"] for g in conn.execute("SELECT id FROM groups WHERE method = 'similar'")]
     assert changes.mark_groups(conn, gids, "suggested")["files"] == 0
+
+
+def _make_legacy(conn, m, aid):
+    """Turn a fresh quarantine into one made before the rename: the folder and the stored paths say deedup."""
+    new, old = m / "disk2/Photos/.deedoop-quarantine", m / "disk2/Photos/.deedup-quarantine"
+    old.mkdir(exist_ok=True)
+    (new / str(aid)).rename(old / str(aid))
+    with conn:
+        conn.execute("""UPDATE action_items SET quarantine = replace(quarantine, '/.deedoop-quarantine/', '/.deedup-quarantine/'),
+                        dst_path = replace(dst_path, '/.deedoop-quarantine/', '/.deedup-quarantine/') WHERE action_id = ?""",
+                     (aid,))
+    return old
+
+
+def test_quarantine_from_before_the_rename_is_skipped_restored_and_purged(unraid, conn, dups):
+    """The rename to deedoop must not orphan files quarantined as .deedup-quarantine (SC2)."""
+    m = dups
+    allow(conn)
+    keep = fid(conn, "a.bin")
+    gid = conn.execute("SELECT id FROM groups WHERE method = 'exact'").fetchone()[0]
+    changes.mark_group(conn, gid, keep)
+    aid = changes.create_removal(conn, m, "quarantine")
+    run(unraid, aid)
+    old = _make_legacy(conn, m, aid)
+    q = old / f"{aid}/old/a copy.bin"
+    assert q.read_bytes() == DATA
+    scan(unraid)  # the old quarantine folder is never indexed either
+    assert exact_groups(conn) == 0
+    assert conn.execute("SELECT COUNT(*) FROM files WHERE dir LIKE '%deedup-quarantine%'").fetchone()[0] == 0
+    assert run(unraid, aid, changes.run_undo) == {"undone": 1, "failed": 0}
+    assert (m / "disk2/Photos/old/a copy.bin").read_bytes() == DATA and not q.exists()
+
+    scan(unraid)
+    changes.mark_group(conn, conn.execute("SELECT id FROM groups WHERE method = 'exact'").fetchone()[0], keep)
+    aid = changes.create_removal(conn, m, "quarantine")
+    run(unraid, aid)
+    old = _make_legacy(conn, m, aid)
+    run(unraid, aid, changes.run_purge)
+    assert not (old / f"{aid}/old/a copy.bin").exists()
+    assert changes.get_action(conn, aid)["can_undo"] is False

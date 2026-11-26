@@ -6,11 +6,11 @@ import time
 
 from fastapi.testclient import TestClient
 
-from deedup import db
-from deedup.benchmark import BenchConfig
-from deedup.config import AppConfig
-from deedup.web.app import create_app
-from deedup.worker import Worker, in_window
+from deedoop import db
+from deedoop.benchmark import BenchConfig
+from deedoop.config import AppConfig
+from deedoop.web.app import create_app
+from deedoop.worker import Worker, in_window
 from tests.conftest import ensure_admin, sign_in, write
 
 
@@ -127,7 +127,7 @@ def test_old_password_variable_becomes_the_admin_password(tmp_path):
     with TestClient(create_app(cfg, start_worker=False)) as client:
         assert client.get("/healthz").status_code == 200
         r = client.post("/login", data={"username": "admin", "password": "an old long s3cret"})
-        assert r.status_code == 200 and "DEEDUP_PASSWORD" in r.text  # signed in; asked to remove the variable
+        assert r.status_code == 200 and "DEEDOOP_PASSWORD" in r.text  # signed in; asked to remove the variable
 
 
 def test_schedule_window():
@@ -189,6 +189,6 @@ def test_theme_toggle_is_on_every_page(unraid):
     with make_client(unraid) as client:
         for path in ("/", "/duplicates", "/browse", "/setup", "/same-path"):
             r = client.get(path)
-            assert 'data-theme-choice="dark"' in r.text and "deedup-theme" in r.text, path
+            assert 'data-theme-choice="dark"' in r.text and "deedoop-theme" in r.text, path
         css = client.get("/static/style.css").text
         assert ':root[data-theme="dark"]' in css and ':root:not([data-theme="light"])' in css
