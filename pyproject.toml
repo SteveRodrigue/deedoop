@@ -55,8 +55,8 @@ ignore = ["E501"]  # long SQL lines read better unwrapped
 # SC5: these modules build SQL from module constants and "?" placeholder lists
 # only; every user value is a bound parameter. Reviewed for M6.5.
 "deedup/{archive_index,changes,db,engine,plans,queries,similar}.py" = ["S608"]
-# SC2: the only modules allowed to rename, link or delete files on /mnt.
-"deedup/{safepath,changes}.py" = ["TID251"]
+# SC2: the only module allowed to rename, link or delete files on /mnt.
+"deedup/safepath.py" = ["TID251"]
 # SC3: the only module allowed to start a subprocess (ExifTool).
 "deedup/metadata.py" = ["TID251"]
 "tests/**" = ["S101", "S608", "S105", "S106", "S108", "S311", "S603", "S607", "S103", "TID251"]
@@ -66,6 +66,8 @@ ignore = ["E501"]  # long SQL lines read better unwrapped
 "os.popen".msg = "SC3: no shell."
 "subprocess".msg = "SC3: subprocesses only in metadata.py."
 "os.rename".msg = "SC2: move files through deedup.safepath."
+"os.rmdir".msg = "SC2: remove folders through deedup.safepath."
+"os.mkdir".msg = "SC2: make folders on /mnt through deedup.safepath."
 "os.replace".msg = "SC2: move files through deedup.safepath."
 "os.link".msg = "SC2: link files through deedup.safepath."
 "os.unlink".msg = "SC2: delete files through deedup.safepath."

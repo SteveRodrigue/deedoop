@@ -32,6 +32,7 @@ import xxhash
 
 from .hashing import EDGE, SMALL, Expected, FileChanged, _open
 from .imaging import IMAGE_HASH_EXTS, MAX_IMAGE_BYTES, NotAnImage, image_hash_for
+from .limits import MAX_DEPTH, ArchiveTooLarge, Budget
 from .metadata import Media, camera_name, normalise_date
 from .scanner import ext_of
 from .similar import similar_hashes
@@ -129,14 +130,14 @@ def _keep_limit(name: str, size: int, depth: int) -> int:
     ext = ext_of(name)
     if ext in IMAGE_HASH_EXTS and size <= MAX_IMAGE_BYTES:
         return MAX_IMAGE_BYTES
-    if depth == 0 and archive_kind(name) and size <= NESTED_LIMIT:
+    if depth < MAX_DEPTH and archive_kind(name) and size <= NESTED_LIMIT:
         return NESTED_LIMIT
     if ext == "json" and size <= JSON_LIMIT:
         return JSON_LIMIT
     return 0
 
 
-def _finish(m: Member, sink: Sink, depth: int, checkpoint) -> Member:
+def _finish(m: Member, sink: Sink, depth: int, checkpoint, budget: Budget | None = None) -> Member:
     m.size = sink.n
     m.hashes["blake3"] = sink.b3.digest()
     m.hashes["partial"] = sink.partial()
@@ -151,30 +152,35 @@ def _finish(m: Member, sink: Sink, depth: int, checkpoint) -> Member:
         m.media = pillow_media(data)
     elif data is not None and ext == "json":
         m.sidecar = parse_sidecar(data)
-    elif data is not None and depth == 0 and archive_kind(m.name):
+    elif data is not None and depth < MAX_DEPTH and archive_kind(m.name):
         m.nested_kind = archive_kind(m.name)
         try:
-            m.children = list(iter_members(io.BytesIO(data), m.nested_kind, depth=1, checkpoint=checkpoint))
+            m.children = list(iter_members(io.BytesIO(data), m.nested_kind, depth=depth + 1, checkpoint=checkpoint,
+                                           budget=budget))
+        except ArchiveTooLarge:
+            raise  # the whole archive is over the limit, not just this inner one
         except Exception as e:  # noqa: BLE001 - a broken inner archive is just a file
             m.error = f"cannot open inner archive: {e}"[:300]
             m.children = []
     return m
 
 
-def _pump(src, sink: Sink, checkpoint) -> None:
+def _pump(src, sink: Sink, checkpoint, budget: Budget | None) -> None:
     while True:
         if checkpoint:
             checkpoint()
         b = src.read(CHUNK)
         if not b:
             break
+        if budget:
+            budget.read(len(b))
         sink.write(b)
 
 
 # -- readers -----------------------------------------------------------------
 
 
-def _iter_zip(fileobj, depth: int, checkpoint) -> Iterator[Member]:
+def _iter_zip(fileobj, depth: int, checkpoint, budget: Budget | None = None) -> Iterator[Member]:
     with zipfile.ZipFile(fileobj) as zf:
         for info in zf.infolist():
             if info.is_dir():
@@ -183,38 +189,42 @@ def _iter_zip(fileobj, depth: int, checkpoint) -> Iterator[Member]:
                 ts = calendar.timegm((*info.date_time, 0, 0, 0))
             except (ValueError, OverflowError):
                 ts = 0
+            if budget:
+                budget.member()
             m = Member(info.filename.lstrip("/"), info.file_size, ts * 1_000_000_000)
             sink = Sink(_keep_limit(m.name, info.file_size, depth))
             try:
                 with zf.open(info) as f:
-                    _pump(f, sink, checkpoint)
+                    _pump(f, sink, checkpoint, budget)
             except (RuntimeError, zipfile.BadZipFile, NotImplementedError, OSError, EOFError) as e:
                 m.error = f"{type(e).__name__}: {e}"[:300]
                 yield m
                 continue
-            yield _finish(m, sink, depth, checkpoint)
+            yield _finish(m, sink, depth, checkpoint, budget)
 
 
-def _iter_tar(fileobj, depth: int, checkpoint) -> Iterator[Member]:
+def _iter_tar(fileobj, depth: int, checkpoint, budget: Budget | None = None) -> Iterator[Member]:
     with tarfile.open(fileobj=fileobj, mode="r|*") as tf:
         for ti in tf:
             if not ti.isfile():
                 continue
-            m = Member(ti.name.lstrip("./").lstrip("/"), ti.size, int(ti.mtime) * 1_000_000_000)
+            if budget:
+                budget.member()
+            m = Member(_strip_dot_slash(ti.name), ti.size, int(ti.mtime) * 1_000_000_000)
             sink = Sink(_keep_limit(m.name, ti.size, depth))
             f = tf.extractfile(ti)
             if f is None:
                 continue
             try:
-                _pump(f, sink, checkpoint)
+                _pump(f, sink, checkpoint, budget)
             except (tarfile.TarError, OSError, EOFError) as e:
                 m.error = f"{type(e).__name__}: {e}"[:300]
                 yield m
                 continue
-            yield _finish(m, sink, depth, checkpoint)
+            yield _finish(m, sink, depth, checkpoint, budget)
 
 
-def _iter_7z(fileobj, depth: int, checkpoint) -> Iterator[Member]:
+def _iter_7z(fileobj, depth: int, checkpoint, budget: Budget | None = None) -> Iterator[Member]:
     import py7zr
     from py7zr.io import Py7zIO, WriterFactory
 
@@ -222,6 +232,9 @@ def _iter_7z(fileobj, depth: int, checkpoint) -> Iterator[Member]:
 
     with py7zr.SevenZipFile(fileobj, mode="r") as z:
         infos = {i.filename: i for i in z.list() if not i.is_directory}
+        if budget:
+            for _ in infos:
+                budget.member()
 
         class Writer(Py7zIO):
             def __init__(self, name: str):
@@ -235,6 +248,8 @@ def _iter_7z(fileobj, depth: int, checkpoint) -> Iterator[Member]:
             def write(self, s):
                 if checkpoint:
                     checkpoint()
+                if budget:
+                    budget.read(len(s))
                 return self.sink.write(bytes(s))
 
             def read(self, size=None):
@@ -252,7 +267,7 @@ def _iter_7z(fileobj, depth: int, checkpoint) -> Iterator[Member]:
             def close(self):
                 if not self.closed:
                     self.closed = True
-                    done.append(_finish(self.member, self.sink, depth, checkpoint))
+                    done.append(_finish(self.member, self.sink, depth, checkpoint, budget))
 
         class Factory(WriterFactory):
             def create(self, filename: str) -> Py7zIO:
@@ -265,17 +280,25 @@ def _iter_7z(fileobj, depth: int, checkpoint) -> Iterator[Member]:
         if name.lstrip("/") not in seen:
             ts = info.creationtime.timestamp() if info.creationtime else 0
             m = Member(name.lstrip("/"), 0, int(ts) * 1_000_000_000)
-            done.append(_finish(m, Sink(), depth, checkpoint))
+            done.append(_finish(m, Sink(), depth, checkpoint, budget))
     yield from done
 
 
-def iter_members(fileobj, kind: str, depth: int = 0, checkpoint: Callable | None = None) -> Iterator[Member]:
+def _strip_dot_slash(name: str) -> str:
+    """``./a/b`` and ``/a/b`` become ``a/b``; ``.hidden`` stays ``.hidden``."""
+    while name.startswith("./"):
+        name = name[2:]
+    return name.lstrip("/")
+
+
+def iter_members(fileobj, kind: str, depth: int = 0, checkpoint: Callable | None = None,
+                 budget: Budget | None = None) -> Iterator[Member]:
     if kind == "zip":
-        yield from _iter_zip(fileobj, depth, checkpoint)
+        yield from _iter_zip(fileobj, depth, checkpoint, budget)
     elif kind == "tar":
-        yield from _iter_tar(fileobj, depth, checkpoint)
+        yield from _iter_tar(fileobj, depth, checkpoint, budget)
     elif kind == "7z":
-        yield from _iter_7z(fileobj, depth, checkpoint)
+        yield from _iter_7z(fileobj, depth, checkpoint, budget)
     else:
         raise ValueError(kind)
 
@@ -290,7 +313,7 @@ def read_archive(path: str, exp: Expected, checkpoint: Callable | None = None) -
         st = os.fstat(f.fileno())
         if st.st_size != exp.size or st.st_mtime_ns != exp.mtime_ns or not stat.S_ISREG(st.st_mode):
             raise FileChanged()
-        members = list(iter_members(f, kind, 0, checkpoint))
+        members = list(iter_members(f, kind, 0, checkpoint, Budget(st.st_size)))
         st = os.fstat(f.fileno())
         if st.st_size != exp.size or st.st_mtime_ns != exp.mtime_ns:
             raise FileChanged()

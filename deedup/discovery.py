@@ -168,6 +168,11 @@ def add_custom_root(conn: sqlite3.Connection, mnt: Path, path_str: str) -> int:
         raise RootError("Pick shares from the list instead of /mnt/user paths; deedup reads the disks directly.")
     if not path.is_dir():
         raise RootError(f"{path} is not a folder.")
+    # A8: the folder and every folder above it (below /mnt) must be real
+    # folders, so a symlink cannot point the scan outside /mnt.
+    real_mnt = Path(os.path.realpath(mnt))
+    if Path(os.path.realpath(path)) != real_mnt / path.relative_to(mnt):
+        raise RootError(f"{path} is, or is inside, a symbolic link. Add the folder it points to instead.")
     for r in conn.execute("SELECT path FROM roots WHERE enabled = 1"):
         if _overlaps(str(path), r["path"]):
             raise RootError(f"{path} overlaps {r['path']}, which is already selected.")

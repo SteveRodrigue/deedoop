@@ -333,3 +333,166 @@ def test_reset_password_from_the_console(unraid, monkeypatch, capsys):
 def test_redirects_stay_local(target, ok):
     """A7: only local paths; /\\ is read as // by browsers."""
     assert (safe_next(target, "DEFAULT") == target) is ok
+
+
+# -- A2: ExifTool argument injection --------------------------------------------------------
+
+
+def test_safe_for_exiftool():
+    from deedup.metadata import safe_for_exiftool
+
+    assert safe_for_exiftool("/mnt/disk1/Photos/IMG 1 (copy).jpg")
+    assert safe_for_exiftool("/mnt/disk1/Photos/-all=.jpg")  # absolute, so never an option
+    for bad in ("relative.jpg", "-all=", "/mnt/a\n-all=\n.jpg", "/mnt/a\r.jpg", "/mnt/a\x00.jpg", "/mnt/\x7f.jpg"):
+        assert not safe_for_exiftool(bad), repr(bad)
+
+
+@pytest.mark.skipif(__import__("shutil").which("exiftool") is None, reason="exiftool not installed")
+def test_a_file_name_cannot_add_exiftool_options(tmp_path):
+    """A2: before M6.5 this name added -all=, which stripped the tags of the other photo."""
+    import subprocess
+
+    from deedup.metadata import UNSAFE_NAME, Reader
+    from tests.test_images import jpeg, photo
+
+    good = tmp_path / "good.jpg"
+    good.write_bytes(jpeg(photo(3)))
+    subprocess.run(["exiftool", "-q", "-overwrite_original", "-Make=Canon", str(good)], check=True)
+    evil = tmp_path / "x\n-all=\n.jpg"
+    evil.write_bytes(jpeg(photo(4)))
+    with Reader() as r:
+        out = r.read([str(evil), str(good)])
+    assert out[str(evil)].error == UNSAFE_NAME
+    assert out[str(good)].camera and "Canon" in out[str(good)].camera
+    tags = subprocess.run(["exiftool", "-s3", "-Make", str(good)], capture_output=True, text=True, check=True)
+    assert tags.stdout.strip() == "Canon"
+    assert not list(tmp_path.glob("*_original"))
+
+
+# -- A5: archive bombs ---------------------------------------------------------------------
+
+
+def _bomb(path: Path, size: int) -> None:
+    import zipfile
+
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
+        with z.open("zeros.bin", "w", force_zip64=True) as f:
+            chunk = b"\0" * (1 << 20)
+            for _ in range(size >> 20):
+                f.write(chunk)
+
+
+def test_zip_bomb_is_skipped_quickly(tmp_path):
+    from deedup.archives import read_archive
+    from deedup.hashing import Expected
+    from deedup.limits import ArchiveTooLarge
+
+    p = tmp_path / "bomb.zip"
+    _bomb(p, 256 << 20)  # 256 MiB of zeros, about 250 KB on disk
+    st = p.stat()
+    assert st.st_size < 1 << 20
+    t = time.time()
+    with pytest.raises(ArchiveTooLarge, match="expands more than"):
+        read_archive(str(p), Expected(st.st_size, st.st_mtime_ns))
+    assert time.time() - t < 10
+
+
+def test_nested_bomb_counts_towards_its_parent(tmp_path):
+    import zipfile
+
+    from deedup.archives import read_archive
+    from deedup.hashing import Expected
+    from deedup.limits import ArchiveTooLarge
+
+    inner = tmp_path / "inner.zip"
+    _bomb(inner, 128 << 20)
+    outer = tmp_path / "outer.zip"
+    with zipfile.ZipFile(outer, "w", zipfile.ZIP_STORED) as z:
+        z.write(inner, "inner.zip")
+    st = outer.stat()
+    with pytest.raises(ArchiveTooLarge):
+        read_archive(str(outer), Expected(st.st_size, st.st_mtime_ns))
+
+
+def test_too_many_members(tmp_path, monkeypatch):
+    import zipfile
+
+    from deedup import limits
+    from deedup.archives import read_archive
+    from deedup.hashing import Expected
+
+    monkeypatch.setattr(limits, "MAX_MEMBERS", 10)
+    p = tmp_path / "many.zip"
+    with zipfile.ZipFile(p, "w") as z:
+        for i in range(11):
+            z.writestr(f"f{i}.txt", str(i))
+    st = p.stat()
+    with pytest.raises(limits.ArchiveTooLarge, match="files inside"):
+        read_archive(str(p), Expected(st.st_size, st.st_mtime_ns))
+
+
+def test_tar_names_keep_their_leading_dots():
+    from deedup.archives import _strip_dot_slash
+
+    assert _strip_dot_slash("./a/b.jpg") == "a/b.jpg"
+    assert _strip_dot_slash(".hidden/x") == ".hidden/x"
+    assert _strip_dot_slash("/abs/x") == "abs/x"
+
+
+# -- A8, A9: symbolic links ------------------------------------------------------------------
+
+
+def test_custom_folder_cannot_be_a_symlink(unraid, conn):
+    from deedup.discovery import RootError, add_custom_root
+
+    outside = unraid.config_dir.parent / "outside"
+    outside.mkdir()
+    (unraid.mnt / "disks/usb/link").symlink_to(outside)
+    with pytest.raises(RootError, match="symbolic link"):
+        add_custom_root(conn, unraid.mnt, str(unraid.mnt / "disks/usb/link"))
+    (unraid.mnt / "disks/usb/link2").symlink_to(unraid.mnt / "disks/usb/Backup")
+    with pytest.raises(RootError, match="symbolic link"):
+        add_custom_root(conn, unraid.mnt, str(unraid.mnt / "disks/usb/link2"))
+    assert add_custom_root(conn, unraid.mnt, str(unraid.mnt / "disks/usb/Backup"))
+
+
+def test_safepath_never_follows_a_swapped_folder(tmp_path):
+    from deedup import safepath
+
+    share = tmp_path / "share"
+    (share / "dir").mkdir(parents=True)
+    (share / "dir/a.jpg").write_bytes(b"a")
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    (victim / "a.jpg").write_bytes(b"precious")
+    q = tmp_path / "q"
+    q.mkdir()
+    # Someone swaps the folder for a symlink after the scan.
+    (share / "dir").rename(share / "dir-old")
+    (share / "dir").symlink_to(victim)
+    with pytest.raises(safepath.UnsafePath):
+        safepath.unlink(str(share / "dir/a.jpg"))
+    with pytest.raises(safepath.UnsafePath):
+        safepath.rename_noclobber(str(share / "dir/a.jpg"), str(q / "a.jpg"))
+    assert (victim / "a.jpg").read_bytes() == b"precious"
+    # Never overwrites.
+    (q / "b.jpg").write_bytes(b"b")
+    with pytest.raises(safepath.Exists):
+        safepath.rename_noclobber(str(share / "dir-old/a.jpg"), str(q / "b.jpg"))
+    safepath.rename_noclobber(str(share / "dir-old/a.jpg"), str(q / "a.jpg"))
+    assert (q / "a.jpg").read_bytes() == b"a"
+    for bad in ("relative", "/a/../b", "/a//b", "/a/./b"):
+        with pytest.raises(safepath.UnsafePath):
+            safepath.check(bad)
+
+
+# -- A10: CSV formulas -------------------------------------------------------------------------
+
+
+def test_csv_cells_cannot_be_formulas():
+    from deedup.queries import csv_cell
+
+    assert csv_cell("=HYPERLINK(\"http://x\")") == "'=HYPERLINK(\"http://x\")"
+    for v in ("+1", "-1", "@SUM(A1)", "\tx", "\rx"):
+        assert csv_cell(v).startswith("'")
+    assert csv_cell("IMG_1.jpg") == "IMG_1.jpg" and csv_cell(5) == 5

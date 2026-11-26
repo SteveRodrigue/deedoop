@@ -414,12 +414,14 @@ def export_csv(conn: sqlite3.Connection, plan_id: int):
     import csv
     import io
 
+    from .queries import csv_cell
+
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(EXPORT_COLUMNS)
     for r in conn.execute(f"SELECT {', '.join(EXPORT_COLUMNS)} FROM plan_items WHERE plan_id = ? ORDER BY src_user",
                           (plan_id,)):
-        w.writerow(list(r))
+        w.writerow([csv_cell(v) for v in r])
         if buf.tell() > 65536:
             yield buf.getvalue()
             buf.seek(0)

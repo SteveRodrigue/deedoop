@@ -295,12 +295,21 @@ def _export_rows(conn: sqlite3.Connection, flt: GroupFilter) -> Iterator[dict]:
                 }
 
 
+def csv_cell(v):
+    """A10: a file name such as ``=HYPERLINK(...)`` must not become a formula
+    when the export is opened in a spreadsheet, so text starting with
+    ``= + - @``, a tab or a carriage return gets a leading apostrophe."""
+    if isinstance(v, str) and v[:1] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + v
+    return v
+
+
 def export_csv(conn: sqlite3.Connection, flt: GroupFilter) -> Iterator[str]:
     buf = io.StringIO()
     w = csv.DictWriter(buf, fieldnames=EXPORT_COLUMNS)
     w.writeheader()
     for row in _export_rows(conn, flt):
-        w.writerow(row)
+        w.writerow({k: csv_cell(v) for k, v in row.items()})
         if buf.tell() > 64 * 1024:
             yield buf.getvalue()
             buf.seek(0)
