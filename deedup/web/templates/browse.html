@@ -6,7 +6,7 @@
 {% else %}
 <section class="card">
   <form method="get" action="/browse" class="row filters">
-    <select name="loc" onchange="this.form.dir.value=''; this.form.submit()">
+    <select name="loc" data-change="reset-dir submit">
       {% for l in locs %}<option value="{{ l.key }}" {{ "selected" if l.key == loc }}>{{ l.label }}</option>{% endfor %}
     </select>
     <input type="hidden" name="dir" value="{{ flt.dir }}">

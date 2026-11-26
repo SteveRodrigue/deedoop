@@ -16,7 +16,7 @@
     {% for k, v in source.items() if k not in ("loc", "dir") and v %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
     <div class="row">
       <label class="small">Files from
-        <select name="loc" onchange="this.form.dir.value=''">
+        <select name="loc" data-change="reset-dir">
           {% for l in locs %}<option value="{{ l.key }}" {{ "selected" if l.key == flt.loc }}>{{ l.label }}</option>{% endfor %}
         </select></label>
       <label class="small">folder <input type="text" name="dir" value="{{ flt.dir }}" placeholder="(whole share)" size="24"></label>
@@ -64,7 +64,7 @@
 
 {% if summ.total %}
 <section class="card">
-  <form method="post" action="/reorganize/save" class="row">
+  <form method="post" action="/reorganize/save" class="row">{% include "_csrf.html" %}
     {% for k, v in source.items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
     <input type="hidden" name="template" value="{{ rule.template }}">
     <input type="hidden" name="fallback" value="{{ rule.fallback }}">

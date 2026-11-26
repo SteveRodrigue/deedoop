@@ -6,22 +6,20 @@ jobs for the worker and changes settings.
 
 from __future__ import annotations
 
-import base64
 import datetime as dt
 import io
 import json
-import secrets
 import zipfile
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import FastAPI, Form, Request
+from fastapi import Depends, FastAPI, Form, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from .. import __version__, changes, db, plans, queries, similar
+from .. import __version__, auth, changes, db, plans, queries, similar
 from ..archive_index import refresh_coverage
 from ..archives import read_member_bytes
 from ..categories import CATEGORIES
@@ -31,8 +29,14 @@ from ..discovery import RootError, add_custom_root, list_disks, list_shares, rem
 from ..imaging import THUMB_EXTS, NotAnImage, make_thumbnail
 from ..metadata import exiftool_available
 from ..worker import Worker
+from . import security
+from .security import safe_next
 
 HERE = Path(__file__).parent
+
+# Typed, bounded query and form values (SC7).
+Page = Annotated[int, Query(ge=1, le=1_000_000)]
+MinMb = Annotated[float, Query(ge=0, le=1e9)]
 
 
 def human_bytes(n: float | None) -> str:
@@ -74,27 +78,35 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
         if start_worker:
             worker.shutdown()
 
-    app = FastAPI(title="deedup", version=__version__, lifespan=lifespan, docs_url=None, redoc_url=None)
+    network = security.Network(cfg.trusted_proxies)
+    setup_code = auth.SetupCode()
+    c0 = db.connect(cfg.db_path)
+    try:
+        auth.bootstrap(c0, cfg.admin_password, setup_code)
+    finally:
+        c0.close()
+
+    # Every route runs the guard first: sign-in, CSRF, origin and host checks (SC1).
+    app = FastAPI(title="deedup", version=__version__, lifespan=lifespan, docs_url=None, redoc_url=None,
+                  openapi_url=None, dependencies=[Depends(security.Guard(cfg.db_path, network))])
     app.state.cfg = cfg
     app.state.worker = worker
+    app.state.setup_code = setup_code
+    app.add_middleware(security.SecurityHeaders, csp=security.content_security_policy(
+        security.inline_script_hashes(HERE / "templates" / "base.html")))
     app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
-    templates = Jinja2Templates(directory=HERE / "templates")
+
+    def auth_context(request: Request) -> dict:
+        sess = getattr(request.state, "session", None)
+        return {"session": sess, "signed_in": sess is not None,
+                "needs_confirm": sess is not None and not sess.recently_confirmed(),
+                "legacy_password": cfg.legacy_password_set,
+                "public_view": getattr(request.state, "public_view", False)}
+
+    templates = Jinja2Templates(directory=HERE / "templates", context_processors=[auth_context])
     templates.env.filters["bytes"] = human_bytes
     templates.env.filters["time"] = fmt_time
     templates.env.globals["version"] = __version__
-
-    if cfg.password:
-        expected = "Basic " + base64.b64encode(f"deedup:{cfg.password}".encode()).decode()
-
-        @app.middleware("http")
-        async def basic_auth(request: Request, call_next):
-            if request.url.path == "/healthz":
-                return await call_next(request)
-            got = request.headers.get("authorization", "")
-            if not secrets.compare_digest(got.encode(), expected.encode()):
-                return Response("Authentication required", status_code=401,
-                                headers={"WWW-Authenticate": 'Basic realm="deedup"'})
-            return await call_next(request)
 
     def conn():
         return db.connect(cfg.db_path)
@@ -123,6 +135,184 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
             "elapsed": elapsed,
             "paused": worker.control.paused if worker.current_job else False,
         }
+
+    # -- sign-in (milestone 6.5) -------------------------------------------------------
+
+    def _ip(request: Request) -> str:
+        return getattr(request.state, "client_ip", "") or ""
+
+    def _signed_in_redirect(request: Request, user_id: int, target: str) -> RedirectResponse:
+        c = conn()
+        try:
+            token = auth.new_session(c, user_id, _ip(request), request.headers.get("user-agent", ""))
+        finally:
+            c.close()
+        resp = RedirectResponse(safe_next(target), status_code=303)
+        resp.set_cookie(auth.COOKIE, token, max_age=auth.SESSION_MAX, httponly=True, samesite="strict",
+                        secure=network.is_https(request), path="/")
+        return resp
+
+    def public_status(c) -> dict:
+        """What the sign-in page shows to anyone: no file names, no paths."""
+        active = db.active_job(c)
+        last = c.execute("SELECT finished_at, state FROM jobs WHERE type = 'scan' AND state NOT IN ('queued', 'running') "
+                         "ORDER BY id DESC LIMIT 1").fetchone()
+        st = queries.index_stats(c, cfg.db_path)
+        return {"scanning": active is not None and active["type"] == "scan", "busy": active is not None,
+                "last_scan": last["finished_at"] if last else None, "last_state": last["state"] if last else "",
+                "files": st.get("files", 0), "groups": st.get("groups", 0), "wasted": st.get("total_wasted", 0)}
+
+    @app.get("/login", response_class=HTMLResponse)
+    def login_page(request: Request, next: str = "/", error: str = ""):
+        if request.state.session is not None:
+            return RedirectResponse(safe_next(next), status_code=303)
+        c = conn()
+        try:
+            first_run = not auth.has_admin(c)
+            if first_run:
+                setup_code.current()  # makes sure a valid code is in the log
+            return templates.TemplateResponse(request, "login.html", {
+                "nav": "login", "next": safe_next(next), "error": error, "first_run": first_run,
+                "status": public_status(c), "public_view": request.state.public_view,
+                "gate": {"open": False}})
+        finally:
+            c.close()
+
+    @app.post("/login")
+    def login(request: Request, username: Annotated[str, Form(max_length=64)] = "",
+              password: Annotated[str, Form(max_length=auth.MAX_PASSWORD)] = "", next: str = Form("/")):
+        c = conn()
+        try:
+            try:
+                uid = auth.authenticate(c, username, password, _ip(request))
+            except auth.AuthError as e:
+                return RedirectResponse(f"/login?next={_q(safe_next(next))}&error={_q(str(e))}", status_code=303)
+            auth.event(c, "signin", username.strip(), _ip(request))
+        finally:
+            c.close()
+        return _signed_in_redirect(request, uid, next)
+
+    @app.post("/first-run")
+    def first_run(request: Request, code: Annotated[str, Form(max_length=64)] = "",
+                  username: Annotated[str, Form(max_length=64)] = "admin",
+                  password: Annotated[str, Form(max_length=auth.MAX_PASSWORD)] = "",
+                  password2: Annotated[str, Form(max_length=auth.MAX_PASSWORD)] = ""):
+        c = conn()
+        try:
+            if auth.has_admin(c):
+                return RedirectResponse("/login", status_code=303)
+            # Wrong codes are throttled like wrong passwords.
+            wait = auth.lockout_remaining(c, _ip(request))
+            if wait:
+                return RedirectResponse(f"/login?error={_q('Too many wrong setup codes. Try again later.')}",
+                                        status_code=303)
+            if not setup_code.check(code):
+                try:
+                    auth.authenticate(c, "(setup code)", "", _ip(request))
+                except auth.AuthError:
+                    pass
+                return RedirectResponse(f"/login?error={_q('That setup code is wrong or has expired. The current code is in the container log.')}",
+                                        status_code=303)
+            if password != password2:
+                return RedirectResponse(f"/login?error={_q('The two passwords are different.')}", status_code=303)
+            try:
+                uid = auth.create_admin(c, username, password)
+            except auth.AuthError as e:
+                return RedirectResponse(f"/login?error={_q(str(e))}", status_code=303)
+            setup_code.burn()
+            auth.event(c, "admin_created", username.strip(), _ip(request), "with the setup code")
+        finally:
+            c.close()
+        return _signed_in_redirect(request, uid, "/setup")
+
+    @app.post("/logout")
+    def logout(request: Request):
+        c = conn()
+        try:
+            auth.end_session(c, request.cookies.get(auth.COOKIE))
+            auth.event(c, "signout", request.state.session.username, _ip(request))
+        finally:
+            c.close()
+        resp = RedirectResponse("/login", status_code=303)
+        resp.delete_cookie(auth.COOKIE, path="/")
+        return resp
+
+    def _confirm(request: Request, c, password: str) -> str | None:
+        """Dangerous actions need the password if it was typed more than 10
+        minutes ago. Return an error message, or None when confirmed."""
+        sess = request.state.session
+        if sess.recently_confirmed():
+            return None
+        if not password:
+            return "Enter your password to confirm."
+        try:
+            auth.confirm_password(c, sess, password, _ip(request))
+        except auth.AuthError as e:
+            return str(e)
+        return None
+
+    @app.post("/account/password")
+    def account_password(request: Request, current: Annotated[str, Form(max_length=auth.MAX_PASSWORD)] = "",
+                         password: Annotated[str, Form(max_length=auth.MAX_PASSWORD)] = "",
+                         password2: Annotated[str, Form(max_length=auth.MAX_PASSWORD)] = ""):
+        sess = request.state.session
+        c = conn()
+        try:
+            try:
+                auth.authenticate(c, sess.username, current, _ip(request))
+            except auth.AuthError as e:
+                return RedirectResponse(f"/setup?error={_q('Current password: ' + str(e))}#account", status_code=303)
+            if password != password2:
+                return RedirectResponse(f"/setup?error={_q('The two new passwords are different.')}#account",
+                                        status_code=303)
+            try:
+                auth.set_password(c, sess.user_id, password)  # also signs out every session
+            except auth.AuthError as e:
+                return RedirectResponse(f"/setup?error={_q(str(e))}#account", status_code=303)
+            auth.event(c, "password_changed", sess.username, _ip(request))
+        finally:
+            c.close()
+        return _signed_in_redirect(request, sess.user_id, "/setup?saved=password#account")
+
+    @app.post("/account/username")
+    def account_username(request: Request, username: Annotated[str, Form(max_length=64)] = ""):
+        sess = request.state.session
+        c = conn()
+        try:
+            try:
+                auth.rename_admin(c, sess.user_id, username)
+            except auth.AuthError as e:
+                return RedirectResponse(f"/setup?error={_q(str(e))}#account", status_code=303)
+            auth.event(c, "username_changed", username.strip(), _ip(request), f"was {sess.username}")
+        finally:
+            c.close()
+        return RedirectResponse("/setup?saved=account#account", status_code=303)
+
+    @app.post("/account/signout-all")
+    def account_signout_all(request: Request):
+        c = conn()
+        try:
+            n = auth.end_all_sessions(c)
+            auth.event(c, "signout_all", request.state.session.username, _ip(request), f"{n} sessions ended")
+        finally:
+            c.close()
+        resp = RedirectResponse("/login", status_code=303)
+        resp.delete_cookie(auth.COOKIE, path="/")
+        return resp
+
+    @app.post("/setup/access")
+    def setup_access(public_view: str = Form(""), allowed_hosts: Annotated[str, Form(max_length=4000)] = ""):
+        hosts = [h.strip().lower() for h in _lines(allowed_hosts.replace(",", "\n"))]
+        c = conn()
+        try:
+            db.set_settings(c, {"public_view": bool(public_view), "allowed_hosts": hosts})
+        finally:
+            c.close()
+        return RedirectResponse("/setup?saved=access#access", status_code=303)
+
+    def _who(request: Request, c, action_id: int) -> None:
+        sess = request.state.session
+        c.execute("UPDATE actions SET username = ?, ip = ? WHERE id = ?", (sess.username, _ip(request), action_id))
 
     # -- pages ----------------------------------------------------------------
 
@@ -160,7 +350,7 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
                           roots=roots, root_counts=queries.root_counts(c), disk_files=disk_files,
                           bench=json.loads(bench["result"]) if bench else None, error=error, saved=saved,
                           mnt=str(cfg.mnt), exiftool=exiftool_available(), gate=changes.gate(c, cfg.mnt),
-                          **job_view(c))
+                          events=auth.recent_events(c) if request.state.session else [], **job_view(c))
         finally:
             c.close()
 
@@ -248,10 +438,16 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
         return RedirectResponse("/setup?saved=settings", status_code=303)
 
     @app.post("/setup/changes")
-    def setup_changes(allow_changes: str = Form(""), allow_direct_delete: str = Form(""),
-                      quarantine_days: int = Form(30)):
+    def setup_changes(request: Request, allow_changes: str = Form(""), allow_direct_delete: str = Form(""),
+                      quarantine_days: int = Form(30),
+                      password: Annotated[str, Form(max_length=auth.MAX_PASSWORD)] = ""):
         c = conn()
         try:
+            before = db.get_settings(c)
+            opening = (bool(allow_changes) and not before["allow_changes"]) or (
+                bool(allow_changes) and bool(allow_direct_delete) and not before["allow_direct_delete"])
+            if opening and (err := _confirm(request, c, password)):
+                return RedirectResponse(f"/setup?error={_q(err)}#changes", status_code=303)
             db.set_settings(c, {"allow_changes": bool(allow_changes),
                                 "allow_direct_delete": bool(allow_changes) and bool(allow_direct_delete),
                                 "quarantine_days": max(0, min(quarantine_days, 3650))})
@@ -282,8 +478,8 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
         return RedirectResponse("/setup?saved=benchmark#benchmark", status_code=303)
 
     @app.get("/duplicates", response_class=HTMLResponse)
-    def duplicates(request: Request, method: str = "exact", category: str = "", q: str = "", min_mb: float = 0,
-                   disk: str = "", group: int = 0, archives: str = "", page: int = 1, msg: str = ""):
+    def duplicates(request: Request, method: str = "exact", category: str = "", q: str = "", min_mb: MinMb = 0,
+                   disk: str = "", group: int = 0, archives: str = "", page: Page = 1, msg: str = ""):
         method = method if method in queries.METHODS else "exact"
         flt = queries.GroupFilter(method=method, category=category, q=q, min_size=int(min_mb * 1e6), disk=disk,
                                   group=group, archives=bool(archives), page=page)
@@ -308,7 +504,7 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
 
     @app.get("/browse", response_class=HTMLResponse)
     def browse(request: Request, loc: str = "", dir: str = "", q: str = "", kind: str = "", year: str = "",
-               camera: str = "", no_gps: str = "", no_date: str = "", dups: str = "", page: int = 1,
+               camera: str = "", no_gps: str = "", no_date: str = "", dups: str = "", page: Page = 1,
                view: str = "list"):
         c = conn()
         try:
@@ -348,9 +544,9 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
         size = 160 if s <= 160 else 320 if s <= 320 else 640
         c = conn()
         try:
-            r = c.execute(
-                f"SELECT f.dir, f.name, f.ext, f.size, f.mtime_ns, r.path, {queries.CONTAINER_COLS} FROM files f "
-                f"JOIN roots r ON r.id = f.root_id {queries.CONTAINER_JOINS} WHERE f.id = ?", (file_id,)).fetchone()
+            sql = (f"SELECT f.dir, f.name, f.ext, f.size, f.mtime_ns, r.path, {queries.CONTAINER_COLS} "  # noqa: S608
+                   f"FROM files f JOIN roots r ON r.id = f.root_id {queries.CONTAINER_JOINS} WHERE f.id = ?")  # SC5: constants
+            r = c.execute(sql, (file_id,)).fetchone()
         finally:
             c.close()
         if r is None or r["ext"] not in THUMB_EXTS:
@@ -431,7 +627,7 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
             c.close()
 
     @app.get("/archives/{file_id}", response_class=HTMLResponse)
-    def archive_page(request: Request, file_id: int, status: str = "new", album: str = "", page: int = 1):
+    def archive_page(request: Request, file_id: int, status: str = "new", album: str = "", page: Page = 1):
         c = conn()
         try:
             parts = queries.archive_parts(c, file_id)
@@ -478,7 +674,7 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
     @app.get("/reorganize", response_class=HTMLResponse)
     def reorganize(request: Request, loc: str = "", dir: str = "", q: str = "", kind: str = "", year: str = "",
                    camera: str = "", no_gps: str = "", no_date: str = "", dups: str = "", template: str = "",
-                   fallback: str = "undated", conflicts: str = "rename", status: str = "", page: int = 1):
+                   fallback: str = "undated", conflicts: str = "rename", status: str = "", page: Page = 1):
         c = conn()
         try:
             locs, flt, source = _plan_inputs(c, loc, dir, q, kind, year, camera, no_gps, no_date, dups)
@@ -533,7 +729,7 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
             c.close()
 
     @app.get("/plans/{plan_id}", response_class=HTMLResponse)
-    def plan_page(request: Request, plan_id: int, status: str = "", page: int = 1, saved: str = "",
+    def plan_page(request: Request, plan_id: int, status: str = "", page: Page = 1, saved: str = "",
                   checked: str = "", error: str = ""):
         c = conn()
         try:
@@ -590,7 +786,7 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
     # -- changes (milestone 6) -----------------------------------------------------
 
     def _back(back: str, default: str = "/duplicates") -> str:
-        return back if back.startswith("/") and not back.startswith("//") else default
+        return safe_next(back, default)
 
     @app.post("/marks/group")
     def marks_group(group_id: int = Form(...), keep: int = Form(...), back: str = Form("")):
@@ -611,7 +807,7 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
         return RedirectResponse(_back(back), status_code=303)
 
     @app.post("/marks/bulk")
-    def marks_bulk(method: str = Form("exact"), category: str = Form(""), q: str = Form(""), min_mb: float = Form(0),
+    def marks_bulk(method: str = Form("exact"), category: str = Form(""), q: str = Form(""), min_mb: Annotated[float, Form(ge=0, le=1e9)] = 0,
                    disk: str = Form(""), rule: str = Form("suggested"), text: str = Form(""), back: str = Form("")):
         if rule not in changes.KEEPER_RULES or method == "similar":
             return RedirectResponse(_back(back), status_code=303)
@@ -647,7 +843,7 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
         return RedirectResponse("/changes", status_code=303)
 
     @app.get("/changes", response_class=HTMLResponse)
-    def changes_page(request: Request, page: int = 1, msg: str = "", error: str = ""):
+    def changes_page(request: Request, page: Page = 1, msg: str = "", error: str = ""):
         per_page = 200
         c = conn()
         try:
@@ -662,13 +858,17 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
             c.close()
 
     @app.post("/changes/remove")
-    def changes_remove(mode: str = Form("quarantine"), confirm: str = Form("")):
+    def changes_remove(request: Request, mode: str = Form("quarantine"), confirm: str = Form(""),
+                       password: Annotated[str, Form(max_length=auth.MAX_PASSWORD)] = ""):
         if mode == "delete" and confirm.strip().lower() != "delete":
             return RedirectResponse(_with_msg("/changes", "Type DELETE to confirm a permanent delete", "error"),
                                     status_code=303)
         c = conn()
         try:
+            if mode == "delete" and (err := _confirm(request, c, password)):
+                return RedirectResponse(_with_msg("/changes", err, "error"), status_code=303)
             aid = changes.create_removal(c, cfg.mnt, mode)
+            _who(request, c, aid)
         except changes.ChangeError as e:
             return RedirectResponse(_with_msg("/changes", str(e), "error"), status_code=303)
         finally:
@@ -677,7 +877,7 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
         return RedirectResponse(f"/changes/{aid}", status_code=303)
 
     @app.get("/changes/{action_id}", response_class=HTMLResponse)
-    def change_page(request: Request, action_id: int, status: str = "", page: int = 1, msg: str = "",
+    def change_page(request: Request, action_id: int, status: str = "", page: Page = 1, msg: str = "",
                     error: str = ""):
         c = conn()
         try:
@@ -705,12 +905,15 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
         return RedirectResponse(_with_msg(f"/changes/{action_id}", "Undo started"), status_code=303)
 
     @app.post("/changes/{action_id}/purge")
-    def change_purge(action_id: int, confirm: str = Form("")):
+    def change_purge(request: Request, action_id: int, confirm: str = Form(""),
+                     password: Annotated[str, Form(max_length=auth.MAX_PASSWORD)] = ""):
         if not confirm:
             return RedirectResponse(_with_msg(f"/changes/{action_id}", "Tick the box to confirm", "error"),
                                     status_code=303)
         c = conn()
         try:
+            if err := _confirm(request, c, password):
+                return RedirectResponse(_with_msg(f"/changes/{action_id}", err, "error"), status_code=303)
             changes.request_purge(c, cfg.mnt, action_id)
         except changes.ChangeError as e:
             return RedirectResponse(_with_msg(f"/changes/{action_id}", str(e), "error"), status_code=303)
@@ -720,12 +923,13 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
         return RedirectResponse(_with_msg(f"/changes/{action_id}", "Emptying the quarantine"), status_code=303)
 
     @app.post("/plans/{plan_id}/apply")
-    def plan_apply(plan_id: int, confirm: str = Form("")):
+    def plan_apply(request: Request, plan_id: int, confirm: str = Form("")):
         if not confirm:
             return RedirectResponse(f"/plans/{plan_id}?error=" + _q("Tick the box to confirm"), status_code=303)
         c = conn()
         try:
             aid = changes.create_move(c, cfg.mnt, plan_id)
+            _who(request, c, aid)
         except changes.ChangeError as e:
             return RedirectResponse(f"/plans/{plan_id}?error=" + _q(str(e)), status_code=303)
         finally:
@@ -743,7 +947,7 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
             c.close()
 
     @app.get("/export/duplicates.{fmt}")
-    def export(fmt: str, method: str = "exact", category: str = "", q: str = "", min_mb: float = 0, disk: str = "",
+    def export(fmt: str, method: str = "exact", category: str = "", q: str = "", min_mb: MinMb = 0, disk: str = "",
                archives: str = ""):
         flt = queries.GroupFilter(method=method, category=category, q=q, min_size=int(min_mb * 1e6), disk=disk,
                                   archives=bool(archives))

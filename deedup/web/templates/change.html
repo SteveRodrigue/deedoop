@@ -21,10 +21,11 @@
   </dl>
   {% if not a.busy and gate.open %}
   <div class="row" style="margin-top:12px">
-    {% if a.can_undo %}<form method="post" action="/changes/{{ a.id }}/undo"><button class="secondary">Undo this change</button></form>{% endif %}
+    {% if a.can_undo %}<form method="post" action="/changes/{{ a.id }}/undo">{% include "_csrf.html" %}<button class="secondary">Undo this change</button></form>{% endif %}
     {% if a.quarantined %}
-    <form method="post" action="/changes/{{ a.id }}/purge" class="row">
+    <form method="post" action="/changes/{{ a.id }}/purge" class="row">{% include "_csrf.html" %}
       <label class="radio small"><input type="checkbox" name="confirm" value="1"> I understand this deletes {{ "{:,}".format(a.quarantined) }} files for good</label>
+      {% if needs_confirm %}<label class="small">Password <input type="password" name="password" autocomplete="current-password" maxlength="1024" size="14"></label>{% endif %}
       <button class="danger">Empty quarantine</button>
     </form>
     {% endif %}

@@ -1,5 +1,17 @@
 {% extends "base.html" %}
-{% block title %}Setup · deedup{% endblock %}
+{% block title %}Setup · deedup{% if signed_in %}
+<section class="card" id="security-log">
+  <h2>Security log</h2>
+  <p class="muted">Sign-ins, failed attempts, lockouts and every change request, newest first.</p>
+  {% if events %}
+  <table class="log">
+    <thead><tr><th>When</th><th>Event</th><th>User</th><th>Address</th><th>Detail</th></tr></thead>
+    {% for e in events %}<tr><td>{{ e.at | time }}</td><td>{{ e.event }}</td><td>{{ e.username }}</td><td class="mono small">{{ e.ip }}</td><td class="detail small">{{ e.detail }}</td></tr>{% endfor %}
+  </table>
+  {% else %}<p class="muted">Nothing yet.</p>{% endif %}
+</section>
+{% endif %}
+{% endblock %}
 {% block content %}
 {% if error %}<div class="flash err">{{ error }}</div>{% endif %}
 {% if saved %}<div class="flash ok">Saved.</div>{% endif %}
@@ -10,7 +22,7 @@
   so every file knows its disk and disks can be read one at a time. Shares such as <code>appdata</code>,
   <code>system</code> and <code>domains</code> are usually best left unticked.</p>
   {% if shares %}
-  <form method="post" action="/setup/shares">
+  <form method="post" action="/setup/shares">{% include "_csrf.html" %}
     <table>
       <thead><tr><th></th><th>Share</th><th>On disks</th><th class="num">Files indexed</th></tr></thead>
       {% for s in shares %}
@@ -36,7 +48,7 @@
 <section class="card">
   <h2>Other folders</h2>
   <p class="muted">Add a folder that is not an Unraid share, for example on an unassigned device. It must be inside <code>{{ mnt }}</code>.</p>
-  <form method="post" action="/setup/custom" class="row">
+  <form method="post" action="/setup/custom" class="row">{% include "_csrf.html" %}
     <input type="text" name="path" placeholder="/mnt/disks/usb-backup/Old laptop" size="50" required>
     <button>Add folder</button>
   </form>
@@ -46,7 +58,7 @@
     <thead><tr><th>Folder</th><th>Disk</th><th class="num">Files indexed</th><th></th></tr></thead>
     {% for r in custom %}
     <tr><td>{{ r.path }}</td><td>{{ r.disk }}</td><td class="num">{{ "{:,}".format(root_counts.get(r.id, 0)) }}</td>
-      <td><form method="post" action="/setup/root/{{ r.id }}/remove"><button class="secondary small">Remove</button></form></td></tr>
+      <td><form method="post" action="/setup/root/{{ r.id }}/remove">{% include "_csrf.html" %}<button class="secondary small">Remove</button></form></td></tr>
     {% endfor %}
   </table>
   {% endif %}
@@ -64,7 +76,7 @@
   </table>
 </section>
 
-<form method="post" action="/setup/settings">
+<form method="post" action="/setup/settings">{% include "_csrf.html" %}
 <section class="card">
   <h2>Scan settings</h2>
   <div class="grid2">
@@ -113,6 +125,43 @@
 </section>
 </form>
 
+<section class="card" id="access">
+  <h2>Sign-in and access</h2>
+  <p class="muted">Signed out, deedup is always read-only: every change needs the admin to be signed in.</p>
+  {% if signed_in %}
+  <form method="post" action="/setup/access">{% include "_csrf.html" %}
+    <label class="radio"><input type="checkbox" name="public_view" value="1" {{ "checked" if settings.public_view }}>
+      <strong>Signed-out visitors can browse (read-only)</strong>: every page, file names, photos and reports.
+      When off, signed-out visitors only see the scan status and the sign-in form.</label>
+    <label>Host names deedup answers to <span class="muted small">(one per line; empty allows any. Guards against DNS rebinding.
+      Include every name and address you open deedup with, for example <span class="mono">tower.local</span> and <span class="mono">192.168.1.10</span>.)</span>
+      <textarea name="allowed_hosts" rows="2" class="mono">{{ settings.allowed_hosts | join("\n") }}</textarea></label>
+    <button>Save</button>
+  </form>
+  {% else %}
+  <p>Signed-out visitors can browse: <strong>{{ "on" if settings.public_view else "off" }}</strong>. <a href="/login?next=/setup">Sign in</a> to change it.</p>
+  {% endif %}
+</section>
+
+{% if signed_in %}
+<section class="card" id="account">
+  <h2>Admin account</h2>
+  <form method="post" action="/account/username" class="row">{% include "_csrf.html" %}
+    <label>User name <input type="text" name="username" value="{{ session.username }}" maxlength="64" required></label>
+    <button class="secondary">Rename</button>
+  </form>
+  <h3>Change the password</h3>
+  <form method="post" action="/account/password" class="stack" style="max-width:420px">{% include "_csrf.html" %}
+    <label>Current password <input type="password" name="current" autocomplete="current-password" required maxlength="1024"></label>
+    <label>New password <input type="password" name="password" autocomplete="new-password" required minlength="12" maxlength="1024"></label>
+    <label>New password again <input type="password" name="password2" autocomplete="new-password" required minlength="12" maxlength="1024"></label>
+    <button>Change password</button>
+  </form>
+  <p class="muted small">Changing the password signs out every other browser.</p>
+  <form method="post" action="/account/signout-all">{% include "_csrf.html" %}<button class="secondary">Sign out everywhere</button></form>
+</section>
+{% endif %}
+
 <section class="card" id="changes">
   <h2>Changes to your files</h2>
   <p class="muted">deedup only reads your disks until you turn this on. Even then, nothing happens until you confirm a
@@ -120,7 +169,7 @@
   <p>Container access to /mnt:
     {% if gate.writable %}<span class="pill ok">read-write</span>{% else %}<span class="pill warn">read-only</span>
     <span class="muted small">To allow changes, edit the container and set the <span class="mono">/mnt</span> path's access mode to read/write.</span>{% endif %}</p>
-  <form method="post" action="/setup/changes">
+  <form method="post" action="/setup/changes">{% include "_csrf.html" %}
     <label class="radio"><input type="checkbox" name="allow_changes" value="1" {{ "checked" if settings.allow_changes }}>
       <strong>Allow changes:</strong> moving duplicates to quarantine, replacing them with hardlinks, and applying saved plans</label>
     <label class="radio"><input type="checkbox" name="allow_direct_delete" value="1" {{ "checked" if settings.allow_direct_delete }}>
@@ -129,6 +178,8 @@
       <span class="muted small">(0 keeps them until you empty the quarantine)</span></label>
     <p class="muted small">The quarantine is a hidden <span class="mono">.deedup-quarantine</span> folder inside each share folder on each disk,
       so a file is renamed, not copied, stays on its disk, and does not create a new share. Scans skip it.</p>
+    {% if needs_confirm %}<label>Your password <span class="muted small">(needed to turn changes or permanent delete on)</span>
+      <input type="password" name="password" autocomplete="current-password" maxlength="1024"></label>{% endif %}
     <button>Save</button>
   </form>
 </section>
@@ -140,7 +191,7 @@
   {% if active and active.type == "benchmark" %}
     {% include "_status.html" %}
   {% else %}
-    <form method="post" action="/setup/benchmark"><button {{ "disabled" if active }}>Run benchmark</button></form>
+    <form method="post" action="/setup/benchmark">{% include "_csrf.html" %}<button {{ "disabled" if active }}>Run benchmark</button></form>
     {% if active %}<p class="muted small">Wait for the current scan to finish first.</p>{% endif %}
   {% endif %}
   {% if bench %}
@@ -164,7 +215,19 @@
   <p><strong>Proposal:</strong>
     {% if bench.proposal.disk_mode == "parallel" %}parallel, {{ bench.proposal.parallel_disks }} disks at once{% else %}one disk at a time{% endif %},
     {{ bench.proposal.hash_threads }} hash thread{{ "s" if bench.proposal.hash_threads > 1 }} per file.</p>
-  <form method="post" action="/setup/benchmark/apply"><button>Apply proposal</button></form>
+  <form method="post" action="/setup/benchmark/apply">{% include "_csrf.html" %}<button>Apply proposal</button></form>
   {% endif %}
 </section>
+{% if signed_in %}
+<section class="card" id="security-log">
+  <h2>Security log</h2>
+  <p class="muted">Sign-ins, failed attempts, lockouts and every change request, newest first.</p>
+  {% if events %}
+  <table class="log">
+    <thead><tr><th>When</th><th>Event</th><th>User</th><th>Address</th><th>Detail</th></tr></thead>
+    {% for e in events %}<tr><td>{{ e.at | time }}</td><td>{{ e.event }}</td><td>{{ e.username }}</td><td class="mono small">{{ e.ip }}</td><td class="detail small">{{ e.detail }}</td></tr>{% endfor %}
+  </table>
+  {% else %}<p class="muted">Nothing yet.</p>{% endif %}
+</section>
+{% endif %}
 {% endblock %}

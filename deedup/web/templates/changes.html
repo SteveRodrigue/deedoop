@@ -20,14 +20,15 @@
 {% if summ.files %}
 <section class="card {{ 'callout' if gate.open }}">
   <h2>Confirm</h2>
-  <form method="post" action="/changes/remove">
+  <form method="post" action="/changes/remove">{% include "_csrf.html" %}
     <div class="modes">
       {% for k, v in modes.items() if k != "delete" or gate.direct_delete %}
       <label class="radio"><input type="radio" name="mode" value="{{ k }}" {{ "checked" if k == "quarantine" }}
-        {% if k == "delete" %}onchange="document.getElementById('confirm-delete').hidden = !this.checked"{% else %}onchange="document.getElementById('confirm-delete').hidden = true"{% endif %}> {{ v }}</label>
+        data-change="confirm-delete"> {{ v }}</label>
       {% endfor %}
     </div>
-    <p id="confirm-delete" hidden><label>Type <strong>DELETE</strong> to confirm <input type="text" name="confirm" autocomplete="off" size="10"></label></p>
+    <p id="confirm-delete" hidden><label>Type <strong>DELETE</strong> to confirm <input type="text" name="confirm" autocomplete="off" size="10"></label>
+      {% if needs_confirm %}<label>and your password <input type="password" name="password" autocomplete="current-password" maxlength="1024" size="16"></label>{% endif %}</p>
     <p class="muted small">Just before each file, deedup checks it and its kept copy again: both unchanged since the scan, the kept copy
       still there and not the same file, and for exact copies both are read and hashed again. Anything that fails is skipped.
       {% if gate.quarantine_days %}Quarantined files are deleted after {{ gate.quarantine_days }} days.{% else %}Quarantined files stay until you empty the quarantine.{% endif %}</p>
@@ -40,7 +41,7 @@
 <section class="card">
   <div class="row between">
     <h2 style="margin:0">Marked for removal</h2>
-    {% if summ.files %}<form method="post" action="/marks/clear"><input type="hidden" name="everything" value="1"><button class="secondary small">Clear all marks</button></form>{% endif %}
+    {% if summ.files %}<form method="post" action="/marks/clear">{% include "_csrf.html" %}<input type="hidden" name="everything" value="1"><button class="secondary small">Clear all marks</button></form>{% endif %}
   </div>
   {% if summ.files %}
   <p><strong>{{ "{:,}".format(summ.files) }}</strong> {{ "copy" if summ.files == 1 else "copies" }}, <strong>{{ summ.bytes | bytes }}</strong>.
@@ -50,7 +51,7 @@
   <p class="muted">Nothing is marked. Choose the copy to keep in <a href="/duplicates">Duplicates</a>, or decide pairs in <a href="/review">Review</a>.</p>
   {% endif %}
   {% if reviewed %}
-  <form method="post" action="/marks/reviewed" class="row">
+  <form method="post" action="/marks/reviewed" class="row">{% include "_csrf.html" %}
     <span class="small">{{ "{:,}".format(reviewed) }} similar {{ "photo" if reviewed == 1 else "photos" }} you chose not to keep in Review.</span>
     <button class="secondary small">Mark them for removal</button>
   </form>
@@ -65,7 +66,7 @@
           · {{ {"exact": "exact copy", "image": "same photo", "similar": "similar photo"}[r.method] }}</div>
         {% if not r.ok %}<span class="pill warn">changed since: will be skipped</span>{% endif %}</td>
       <td class="num">{{ r.size | bytes }}</td>
-      <td><form method="post" action="/marks/clear"><input type="hidden" name="file_id" value="{{ r.file_id }}"><button class="secondary small">Keep</button></form></td>
+      <td><form method="post" action="/marks/clear">{% include "_csrf.html" %}<input type="hidden" name="file_id" value="{{ r.file_id }}"><button class="secondary small">Keep</button></form></td>
     </tr>
     {% endfor %}
   </table>

@@ -14,8 +14,8 @@
     <h2 style="margin:0;overflow-wrap:anywhere">{{ p.name }}</h2>
     <div class="row">
       <a class="small" href="/plans/{{ p.id }}/export.csv">Export CSV</a>
-      <form method="post" action="/plans/{{ p.id }}/recheck"><button class="secondary small">Check again</button></form>
-      <form method="post" action="/plans/{{ p.id }}/delete"><button class="danger small">Delete plan</button></form>
+      <form method="post" action="/plans/{{ p.id }}/recheck">{% include "_csrf.html" %}<button class="secondary small">Check again</button></form>
+      <form method="post" action="/plans/{{ p.id }}/delete">{% include "_csrf.html" %}<button class="danger small">Delete plan</button></form>
     </div>
   </div>
   <dl class="kv" style="margin-top:10px">
@@ -42,7 +42,7 @@
   <p class="muted">Changes are off. {% if not gate.allowed %}Turn on <strong>Allow changes</strong> on the <a href="/setup#changes">Setup</a> screen.{% endif %}
     {% if not gate.writable %}/mnt is mounted read-only in the container.{% endif %}</p>
   {% elif p.moving %}
-  <form method="post" action="/plans/{{ p.id }}/apply">
+  <form method="post" action="/plans/{{ p.id }}/apply">{% include "_csrf.html" %}
     <p class="small">Moves {{ "{:,}".format(p.moving) }} files. Each one is checked first: unchanged since the plan, and nothing at its destination.
       Files on the same disk are renamed; files from another device are copied, checked, and the original goes to quarantine.
       You can undo the whole plan afterwards.</p>

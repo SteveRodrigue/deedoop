@@ -33,3 +33,36 @@ document.addEventListener("keydown", function (ev) {
   var b = document.querySelector('[data-review] button[data-key="' + ev.key.toLowerCase() + '"]');
   if (b && !b.disabled) { ev.preventDefault(); b.click(); }
 });
+
+// Small form behaviours. They live here, not in onchange="" attributes, because
+// the Content-Security-Policy allows no inline scripts (SC6).
+document.addEventListener("change", function (ev) {
+  var t = ev.target;
+  var what = t.getAttribute && t.getAttribute("data-change");
+  if (!what) return;
+  what.split(" ").forEach(function (w) {
+    if (w === "reset-dir" && t.form && t.form.dir) t.form.dir.value = "";
+    if (w === "submit" && t.form) t.form.submit();
+    if (w === "toggle-path-text" && t.form && t.form.text) t.form.text.hidden = t.value !== "path";
+    if (w === "confirm-delete") {
+      var p = document.getElementById("confirm-delete");
+      if (p) p.hidden = !(t.value === "delete" && t.checked);
+    }
+  });
+});
+document.addEventListener("input", function (ev) {
+  var t = ev.target;
+  if (t.getAttribute && t.getAttribute("data-input") === "show-value" && t.nextElementSibling) {
+    t.nextElementSibling.textContent = t.value;
+  }
+});
+
+// Signed out: forms that would change something are shown, but disabled.
+function deedupReadonly() {
+  document.querySelectorAll("body[data-readonly] form[method=post]:not([data-public]) button").forEach(function (b) {
+    b.disabled = true;
+    b.title = "Sign in to change this";
+  });
+}
+deedupReadonly();
+document.addEventListener("htmx:afterSwap", deedupReadonly);
