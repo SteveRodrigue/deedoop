@@ -5,7 +5,7 @@
   </picture>
 </h1>
 
-**Dedupe your hoard, safely.** In the logo, the second e and o are greyed out: the copies deedoop finds for you.
+**Dedupe your hoard, safely.**
 
 deedoop finds the duplicates other tools miss on your Unraid server: identical files with different names, photos that differ only in their metadata, re-compressed copies, and the contents of Google Takeout zips you've already got on disk. It indexes your terabytes incrementally, one disk at a time, and shows you everything before touching a single file.
 
