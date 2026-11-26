@@ -7,7 +7,7 @@ from collections import Counter
 _CATS = {
     "image": "jpg jpeg jpe png gif bmp tif tiff webp heic heif avif raw cr2 cr3 nef arw dng orf rw2 raf srw pef psd svg ico jxl",
     "video": "mp4 m4v mov avi mkv wmv flv webm mpg mpeg mts m2ts ts 3gp vob mxf",
-    "audio": "mp3 flac wav aac m4a ogg opus wma aiff aif alac ape mka",
+    "audio": "mp3 flac wav aac m4a ogg opus wma aiff aif alac ape mka wv",
     "document": "pdf doc docx xls xlsx ppt pptx odt ods odp rtf txt md csv epub mobi pages numbers key",
     "archive": "zip tar gz tgz bz2 xz 7z rar zst lz4 iso img dmg cab",
     "code": "py js ts java c h cpp go rs rb php html css json xml yaml yml sh",

@@ -53,12 +53,23 @@ os.rename(src, dst)                   # wrong: follows symlinks, overwrites
 
 ### SC3 No shell, and checked arguments
 
-The only subprocess is ExifTool, in `metadata.py`. Arguments are a list of
-fixed options plus paths that passed `safe_for_exiftool()` (absolute, no line
-breaks or control characters). Never `shell=True`, never `os.system`.
+Subprocesses run in two modules only: ExifTool in `metadata.py`, and ffprobe
+and ffmpeg in `av.py` (milestone 7). Arguments are a list of fixed options
+plus paths that passed `safe_for_exiftool()` or `safe_for_ffmpeg()`
+(absolute, no line breaks or control characters). Never `shell=True`, never
+`os.system`.
+
+ffmpeg can follow references inside a media file (an HLS playlist or an
+`ffconcat` list names other files or URLs), so a crafted file in the backups
+could make it read something else. Every ffprobe and ffmpeg call therefore
+opens only local files (`-protocol_whitelist file`), only with the demuxers of
+ordinary media files (`-format_whitelist`), gives the path as `file:/…`, and
+has a time limit.
 
 *Checked by:* ruff `S6xx` rules and `TID251` (`subprocess`, `os.system`,
-`os.popen` banned outside `metadata.py`); `test_a_file_name_cannot_add_exiftool_options`.
+`os.popen` banned outside `metadata.py` and `av.py`);
+`test_a_file_name_cannot_add_exiftool_options`, `test_a_file_name_cannot_add_ffmpeg_options`,
+`test_a_crafted_media_file_cannot_open_other_files`.
 
 ### SC4 Archives are read, never extracted
 

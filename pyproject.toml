@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "deedup"
-version = "0.6.5"
+version = "0.7.0"
 description = "Duplicate finder for Unraid and other big file hoards: dedupe your hoard, safely."
 readme = "README.md"
 license = "Apache-2.0"
@@ -53,18 +53,19 @@ ignore = ["E501"]  # long SQL lines read better unwrapped
 
 [tool.ruff.lint.per-file-ignores]
 # SC5: these modules build SQL from module constants and "?" placeholder lists
-# only; every user value is a bound parameter. Reviewed for M6.5.
-"deedup/{archive_index,changes,db,engine,plans,queries,similar}.py" = ["S608"]
+# only; every user value is a bound parameter. Reviewed for M6.5 (media_index for M7).
+"deedup/{archive_index,changes,db,engine,media_index,plans,queries,similar}.py" = ["S608"]
 # SC2: the only module allowed to rename, link or delete files on /mnt.
 "deedup/safepath.py" = ["TID251"]
-# SC3: the only module allowed to start a subprocess (ExifTool).
-"deedup/metadata.py" = ["TID251"]
+# SC3: the only modules allowed to start a subprocess: ExifTool (metadata.py)
+# and ffprobe/ffmpeg (av.py, milestone 7).
+"deedup/{metadata,av}.py" = ["TID251"]
 "tests/**" = ["S101", "S608", "S105", "S106", "S108", "S311", "S603", "S607", "S103", "TID251"]
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "os.system".msg = "SC3: no shell. Use the ExifTool reader in metadata.py."
 "os.popen".msg = "SC3: no shell."
-"subprocess".msg = "SC3: subprocesses only in metadata.py."
+"subprocess".msg = "SC3: subprocesses only in metadata.py (ExifTool) and av.py (ffprobe, ffmpeg)."
 "os.rename".msg = "SC2: move files through deedup.safepath."
 "os.rmdir".msg = "SC2: remove folders through deedup.safepath."
 "os.mkdir".msg = "SC2: make folders on /mnt through deedup.safepath."

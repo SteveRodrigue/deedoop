@@ -22,10 +22,10 @@ import sqlite3
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import db
+from . import db, scanners
 from .archive_index import (
     archive_candidates,
     archive_disk,
@@ -48,7 +48,7 @@ log = logging.getLogger("deedup.engine")
 FLUSH_SECONDS = 2.0
 META_BATCH = 100
 # Phases whose progress is shown in bytes rather than files.
-BYTE_PHASES = {"hash_full", "hash_image", "hash_similar", "archives"}
+BYTE_PHASES = {"hash_full", "hash_image", "hash_similar", "archives", "hash_stream"}
 
 
 @dataclass
@@ -78,6 +78,40 @@ def for_each_disk(disks: list[str], settings: dict, fn: Callable[[str], None]) -
             fn(d)
 
 
+@dataclass
+class Scan:
+    """One scan as the scanner plugins see it (see ``scanners.py``)."""
+
+    ctx: ScanContext
+    conn: sqlite3.Connection
+    settings: dict
+    disks: list[str]
+    min_size: int = 1
+    pairs: bool = True  # rebuild similar pairs and archive coverage too (False after a change: groups only)
+    _once: set = field(default_factory=set)
+
+    def once(self, name: str) -> bool:
+        """True when a hook shared by two scanners already ran in this scan."""
+        if name in self._once:
+            return True
+        self._once.add(name)
+        return False
+
+    def run_phase(self, phase: str, todo: list[sqlite3.Row], worker) -> None:
+        st, disks, settings, ctx = self.ctx.status, self.disks, self.settings, self.ctx
+        st.set(phase=phase)
+        by_disk: dict[str, list] = {d: [] for d in disks}
+        for row in todo:
+            by_disk.setdefault(row["disk"], []).append(row)
+        for d, rows in by_disk.items():
+            st.disk(d, state="waiting" if rows else "idle", todo_files=len(rows),
+                    todo_bytes=sum(r["size"] for r in rows) if phase in BYTE_PHASES else 0,
+                    done_files=0, done_bytes=0, current="")
+        for_each_disk([d for d in disks if by_disk.get(d)], settings,
+                      lambda disk: worker(ctx, disk, phase, by_disk.get(disk, []), settings))
+        _save_cursor(self.conn, ctx.job_id, {"phase": phase + "_done"})
+
+
 def run_scan(ctx: ScanContext) -> dict:
     conn = db.connect(ctx.db_path)
     try:
@@ -86,7 +120,8 @@ def run_scan(ctx: ScanContext) -> dict:
         roots = conn.execute("SELECT * FROM roots WHERE enabled = 1 ORDER BY path").fetchall()
         disks = _disks_in_order(roots)
         st = ctx.status
-        st.set(phase="walk", disks_order=disks, mode=settings["disk_mode"])
+        st.set(phase="walk", disks_order=disks, mode=settings["disk_mode"],
+               scanners=scanners.active_keys(settings))
         for d in disks:
             st.disk(d, state="waiting")
 
@@ -109,62 +144,112 @@ def run_scan(ctx: ScanContext) -> dict:
 
         for_each_disk(disks, settings, walk_disk)
         _save_cursor(conn, ctx.job_id, {"phase": "walked"})
-        min_size = max(1, int(settings["min_size"]))
+        scan = Scan(ctx, conn, settings, disks, max(1, int(settings["min_size"])))
 
-        def run_phase(phase: str, todo: list[sqlite3.Row], worker) -> None:
-            st.set(phase=phase)
-            by_disk: dict[str, list] = {d: [] for d in disks}
-            for row in todo:
-                by_disk.setdefault(row["disk"], []).append(row)
-            for d, rows in by_disk.items():
-                st.disk(d, state="waiting" if rows else "idle", todo_files=len(rows),
-                        todo_bytes=sum(r["size"] for r in rows) if phase in BYTE_PHASES else 0,
-                        done_files=0, done_bytes=0, current="")
-            for_each_disk([d for d in disks if by_disk.get(d)], settings,
-                          lambda disk: worker(ctx, disk, phase, by_disk.get(disk, []), settings))
-            _save_cursor(conn, ctx.job_id, {"phase": phase + "_done"})
-
-        # 2. archives: members are streamed through the same hashes, nothing is extracted
-        run_phase("archives", archive_candidates(conn, settings), archive_disk)
-        run_phase("sidecars", loose_json_candidates(conn, settings), json_disk)
-        # 3. photos: one full read gives the image-data hash and the exact hashes
-        similar = bool(settings["similar_matching"])
-        if settings["image_matching"] or similar:
-            run_phase("hash_image", _image_candidates(conn, min_size), _hash_disk)
-        # 3b. perceptual hashes for photos indexed before similar matching was on
-        if similar:
-            run_phase("hash_similar", _similar_candidates(conn, min_size), _hash_disk)
-        # 4. metadata: headers only, through ExifTool
-        if settings["metadata"]:
+        # 2. scanners that read before the exact hashes: archives, photos, media headers
+        for key in scanners.active_keys(settings):
+            if scanners.REGISTRY[key].index:
+                scanners.hook(scanners.REGISTRY[key].index)(scan)
+        # 3. metadata: headers only, through ExifTool, for the photo and video scanners
+        if settings["metadata"] and (exts := scanners.exiftool_exts(settings)):
             if exiftool_available():
-                run_phase("metadata", _metadata_candidates(conn), _metadata_disk)
+                scan.run_phase("metadata", _metadata_candidates(conn, exts), _metadata_disk)
             else:
                 log.warning("exiftool not found; skipping metadata")
-        # 5. partial hashes, 6. full hashes
+        # 4. partial hashes, 5. full hashes: every file type, always
         for phase in ("hash_partial", "hash_full"):
-            run_phase(phase, _candidates(conn, phase, min_size), _hash_disk)
+            scan.run_phase(phase, _candidates(conn, phase, scan.min_size), _hash_disk)
+        # 6. scanners that need the exact hashes: media stream hashes
+        for key in scanners.active_keys(settings):
+            if scanners.REGISTRY[key].after_hashes:
+                scanners.hook(scanners.REGISTRY[key].after_hashes)(scan)
 
-        # 7. groups, Takeout sidecars, archive coverage
+        # 7. groups
         st.set(phase="group")
-        summary = rebuild_exact_groups(conn, min_size)
-        img = rebuild_image_groups(conn, min_size) if settings["image_matching"] else _drop_groups(conn, "image")
-        summary.update({"image_groups": img["groups"], "image_wasted": img["wasted"]})
-        summary["sidecars"] = pair_sidecars(conn)
-        threshold = similar_threshold(settings)
-        if similar:
-            st.set(phase="similar")
-            summary["similar_pairs"] = rebuild_pairs(conn)
-            sim = rebuild_similar_groups(conn, threshold)
-            summary.update({"similar_groups": sim["groups"], "similar_wasted": sim["wasted"]})
-        else:
-            _drop_groups(conn, "similar")
-            conn.execute("DELETE FROM similar_pairs")
-        refresh_coverage(conn, threshold if similar else None)
-        summary["archives"] = conn.execute("SELECT COUNT(*) FROM archives").fetchone()[0]
+        summary = regroup(conn, settings, scan=scan)
         st.set(phase="done")
         return summary
     finally:
         conn.close()
+
+
+def regroup(conn: sqlite3.Connection, settings: dict, scan: Scan | None = None, pairs: bool = True) -> dict:
+    """Rebuild every duplicate group from the stored hashes, for the scanners
+    that are on, and drop the groups and marks of those that are off. Runs at
+    the end of a scan, after changes, and when Setup turns a scanner off."""
+    scan = scan or Scan(ScanContext(Path(), Path(), 0, Control(), Status()), conn, settings, [],
+                        max(1, int(settings["min_size"])))
+    scan.pairs = pairs
+    summary = rebuild_exact_groups(conn, scan.min_size, members=scanners.active(settings, "archive"))
+    on = scanners.active_keys(settings)
+    for key, s in scanners.REGISTRY.items():
+        if key not in on and s.drop:
+            scanners.hook(s.drop)(scan)
+    for key in on:
+        if scanners.REGISTRY[key].group:
+            summary.update(scanners.hook(scanners.REGISTRY[key].group)(scan) or {})
+    methods = scanners.methods(settings)
+    with db.Tx(conn):
+        conn.execute(f"DELETE FROM marks WHERE method NOT IN ({','.join('?' * len(methods))})", methods)
+    return summary
+
+
+# -- the photo scanner (milestones 2 and 4) --------------------------------------------
+
+
+def photo_index(scan: Scan) -> None:
+    conn, settings, min_size = scan.conn, scan.settings, scan.min_size
+    # one full read gives the image-data hash and the exact hashes
+    similar = bool(settings["similar_matching"])
+    if settings["image_matching"] or similar:
+        scan.run_phase("hash_image", _image_candidates(conn, min_size), _hash_disk)
+    # perceptual hashes for photos indexed before similar matching was on
+    if similar:
+        scan.run_phase("hash_similar", _similar_candidates(conn, min_size), _hash_disk)
+
+
+def photo_group(scan: Scan) -> dict:
+    conn, settings, min_size = scan.conn, scan.settings, scan.min_size
+    members = scanners.active(settings, "archive")
+    summary: dict = {}
+    img = rebuild_image_groups(conn, min_size, members=members) if settings["image_matching"] \
+        else _drop_groups(conn, "image")
+    summary.update({"image_groups": img["groups"], "image_wasted": img["wasted"]})
+    if settings["similar_matching"]:
+        if scan.pairs:
+            scan.ctx.status.set(phase="similar")
+            summary["similar_pairs"] = rebuild_pairs(conn)
+        sim = rebuild_similar_groups(conn, similar_threshold(settings))
+        summary.update({"similar_groups": sim["groups"], "similar_wasted": sim["wasted"]})
+    else:
+        _drop_groups(conn, "similar")
+        conn.execute("DELETE FROM similar_pairs")
+    return summary
+
+
+def photo_drop(scan: Scan) -> None:
+    for m in ("image", "similar"):
+        _drop_groups(scan.conn, m)
+    scan.conn.execute("DELETE FROM similar_pairs")
+
+
+# -- the archive scanner (milestone 3) ---------------------------------------------------
+
+
+def archive_index(scan: Scan) -> None:
+    # members are streamed through the same hashes, nothing is extracted
+    scan.run_phase("archives", archive_candidates(scan.conn, scan.settings), archive_disk)
+    scan.run_phase("sidecars", loose_json_candidates(scan.conn, scan.settings), json_disk)
+
+
+def archive_group(scan: Scan) -> dict:
+    conn, settings = scan.conn, scan.settings
+    similar = scanners.active(settings, "photo") and settings["similar_matching"]
+    out = {"sidecars": pair_sidecars(conn)}
+    if scan.pairs:
+        refresh_coverage(conn, similar_threshold(settings) if similar else None)
+    out["archives"] = conn.execute("SELECT COUNT(*) FROM archives").fetchone()[0]
+    return out
 
 
 def _save_cursor(conn: sqlite3.Connection, job_id: int, cursor: dict) -> None:
@@ -243,8 +328,8 @@ def similar_threshold(settings: dict) -> int:
         return DEFAULT_THRESHOLD
 
 
-def _metadata_candidates(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    exts = sorted(METADATA_EXTS)
+def _metadata_candidates(conn: sqlite3.Connection, exts: set[str] | None = None) -> list[sqlite3.Row]:
+    exts = sorted(exts if exts is not None else METADATA_EXTS)
     live = _LIVE.format(extra=", f.ext", join="")
     sql = f"""
         WITH live AS ({live} AND f.container_id = 0 AND f.ext IN ({",".join("?" * len(exts))}))
@@ -368,12 +453,13 @@ def _hash_disk(ctx: ScanContext, disk: str, phase: str, rows: list[sqlite3.Row],
             conn.close()
 
 
-def rebuild_exact_groups(conn: sqlite3.Connection, min_size: int = 1) -> dict:
+def rebuild_exact_groups(conn: sqlite3.Connection, min_size: int = 1, members: bool = True) -> dict:
     """Recompute the ``exact`` duplicate groups from stored BLAKE3 hashes.
 
     Archive members join groups, but only loose files count as reclaimable:
     a copy inside a zip cannot be deleted on its own, and the last loose
-    copy is never counted because an archive also holds it.
+    copy is never counted because an archive also holds it. With the archive
+    scanner off (``members=False``), archive members are left out.
     """
     rows = conn.execute(
         f"""
@@ -382,7 +468,7 @@ def rebuild_exact_groups(conn: sqlite3.Connection, min_size: int = 1) -> dict:
             FROM files f
             JOIN roots r ON r.id = f.root_id
             JOIN hashes h ON h.file_id = f.id AND h.kind = 'blake3'
-            WHERE f.state = 'present' AND r.enabled = 1 AND f.size >= :min
+            WHERE f.state = 'present' AND r.enabled = 1 AND f.size >= :min AND (:members OR f.container_id = 0)
         ),
         keys AS (
             SELECT size, value FROM live GROUP BY size, value
@@ -390,7 +476,7 @@ def rebuild_exact_groups(conn: sqlite3.Connection, min_size: int = 1) -> dict:
         )
         SELECT live.* FROM live JOIN keys USING (size, value) ORDER BY live.size, live.value, live.id
         """,
-        {"min": min_size},
+        {"min": min_size, "members": int(members)},
     ).fetchall()
     now = time.time()
     groups = wasted = files = 0
@@ -421,7 +507,7 @@ def _drop_groups(conn: sqlite3.Connection, method: str) -> dict:
     return {"groups": 0, "wasted": 0, "files": 0}
 
 
-def rebuild_image_groups(conn: sqlite3.Connection, min_size: int = 1) -> dict:
+def rebuild_image_groups(conn: sqlite3.Connection, min_size: int = 1, members: bool = True) -> dict:
     """Recompute the ``image`` groups: photos with the same image data but
     different bytes (so their metadata differs). Groups whose members are all
     byte-identical are left to the ``exact`` method.
@@ -437,12 +523,12 @@ def rebuild_image_groups(conn: sqlite3.Connection, min_size: int = 1) -> dict:
             JOIN roots r ON r.id = f.root_id
             JOIN hashes i ON i.file_id = f.id AND i.kind = 'img_exact'
             JOIN hashes b ON b.file_id = f.id AND b.kind = 'blake3'
-            WHERE f.state = 'present' AND r.enabled = 1 AND f.size >= :min
+            WHERE f.state = 'present' AND r.enabled = 1 AND f.size >= :min AND (:members OR f.container_id = 0)
         ),
         keys AS (SELECT img FROM live GROUP BY img HAVING COUNT(DISTINCT full) > 1)
         SELECT live.* FROM live JOIN keys USING (img) ORDER BY live.img, live.size DESC, live.id
         """,
-        {"min": min_size},
+        {"min": min_size, "members": int(members)},
     ).fetchall()
     now = time.time()
     groups = wasted = files = 0
