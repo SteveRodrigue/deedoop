@@ -29,11 +29,11 @@
     <p style="margin:0">Photos that look the same but whose image data differs: recompressed or resized copies, such as Google
       “Storage saver”, or exports from an editor. Your decisions are only recorded; removing the copies you did not keep is confirmed on the <a href="/changes">Changes</a> screen.</p>
   </div>
-  <form method="post" action="/review/threshold" class="row filters" style="margin-top:10px">
+  <form method="post" action="/review/threshold" class="row filters" style="margin-top:10px">{% include "_csrf.html" %}
     <input type="hidden" name="view" value="{{ view }}">
     <label class="small">Match closeness
       <input type="range" name="threshold" min="0" max="{{ max_distance }}" value="{{ threshold }}"
-             oninput="this.nextElementSibling.textContent = this.value" style="vertical-align:middle">
+             data-input="show-value" style="vertical-align:middle">
       <output>{{ threshold }}</output></label>
     <button class="secondary small">Apply</button>
     <span class="muted small">Lower is stricter. 8 is the default; above 8 brings more pairs that are not the same photo.</span>
@@ -53,7 +53,7 @@
       {{ side(pr.a, "a", pr) }}
       {{ side(pr.b, "b", pr) }}
     </div>
-    <form method="post" action="/review/decide" class="decide">
+    <form method="post" action="/review/decide" class="decide">{% include "_csrf.html" %}
       <input type="hidden" name="a" value="{{ pr.a.id }}"><input type="hidden" name="b" value="{{ pr.b.id }}">
       <button name="decision" value="keep_a" data-key="k">Keep left<kbd>K</kbd></button>
       <button name="decision" value="keep_b" data-key="j">Keep right<kbd>J</kbd></button>
@@ -81,7 +81,7 @@
           <div class="small path" title="{{ pr.b.user_path }}">{{ pr.b.name }}</div></td>
         <td>{% if pr.kept %}Same photo, keep {{ pr.kept }}{% else %}{{ decisions[pr.decision] }}{% endif %}<div class="muted small">distance {{ pr.pdist }}</div></td>
         <td class="muted small col-mtime">{{ pr.decided_at | time }}</td>
-        <td><form method="post" action="/review/undo"><input type="hidden" name="a" value="{{ pr.a.id }}"><input type="hidden" name="b" value="{{ pr.b.id }}">
+        <td><form method="post" action="/review/undo">{% include "_csrf.html" %}<input type="hidden" name="a" value="{{ pr.a.id }}"><input type="hidden" name="b" value="{{ pr.b.id }}">
           <button class="secondary small">Undo</button></form></td>
       </tr>
       {% endfor %}

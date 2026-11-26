@@ -177,6 +177,20 @@ table.plan td.move .path { max-width: none; }
 table.plan .to { color: var(--ink); font-weight: 500; }
 .pill.dup { color: var(--accent); border-color: var(--accent); }
 
+/* Milestone 6.5: sign-in, read-only banner, account. */
+.banner { background: var(--card); border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 8px;
+  padding: 8px 12px; margin: 0 0 16px; font-size: 14px; }
+.banner.warn { border-left-color: var(--warn); }
+.account { display: inline-flex; align-items: center; gap: 8px; margin: 0; }
+.account-link { white-space: nowrap; font-size: 14px; }
+.login { max-width: 460px; margin: 0 auto; }
+.stack { display: grid; gap: 10px; }
+.stack label { display: grid; gap: 4px; }
+.stack input[type=text], .stack input[type=password] { width: 100%; box-sizing: border-box; }
+body[data-readonly] form[method=post]:not([data-public]) button[disabled] { cursor: not-allowed; }
+table.log td { white-space: nowrap; }
+table.log td.detail { white-space: normal; }
+
 @media (max-width: 640px) {
   .theme { margin-left: 0; }
   .photos { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }

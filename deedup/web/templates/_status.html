@@ -17,11 +17,11 @@
     </div>
     <div class="row">
       {% if paused %}
-      <form method="post" action="/scan/resume"><button>Resume</button></form>
+      <form method="post" action="/scan/resume">{% include "_csrf.html" %}<button>Resume</button></form>
       {% else %}
-      <form method="post" action="/scan/pause"><button>Pause</button></form>
+      <form method="post" action="/scan/pause">{% include "_csrf.html" %}<button>Pause</button></form>
       {% endif %}
-      <form method="post" action="/scan/stop"><button class="secondary">Stop</button></form>
+      <form method="post" action="/scan/stop">{% include "_csrf.html" %}<button class="secondary">Stop</button></form>
     </div>
   </div>
   {% if live.todo and not live.disks %}
@@ -71,7 +71,7 @@
       {% endif %}
       {% if settings.schedule_enabled %}<div class="small muted">Scheduled daily {{ settings.schedule_start }} to {{ settings.schedule_end }}.</div>{% endif %}
     </div>
-    <form method="post" action="/scan/start"><button>Start scan</button></form>
+    <form method="post" action="/scan/start">{% include "_csrf.html" %}<button>Start scan</button></form>
   </div>
 {% endif %}
 </div>

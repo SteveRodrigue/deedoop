@@ -43,3 +43,32 @@ def scan(cfg: AppConfig, job_id: int | None = None, control: Control | None = No
     finally:
         c.close()
     return run_scan(ScanContext(cfg.db_path, cfg.mnt, jid, control or Control(), Status()))
+
+
+# -- signed-in web clients (milestone 6.5) ----------------------------------------
+
+TEST_USER = "admin"
+TEST_PASSWORD = "correct horse battery staple"
+
+
+def ensure_admin(cfg: AppConfig) -> None:
+    from deedup import auth
+
+    c = db.connect(cfg.db_path)
+    try:
+        if not auth.has_admin(c):
+            auth.create_admin(c, TEST_USER, TEST_PASSWORD)
+    finally:
+        c.close()
+
+
+def sign_in(client, cfg: AppConfig, password: str = TEST_PASSWORD) -> None:
+    """Sign the TestClient in and send the session's CSRF token on every request."""
+    r = client.post("/login", data={"username": TEST_USER, "password": password}, follow_redirects=False)
+    assert r.status_code == 303 and "error" not in r.headers["location"], r.headers.get("location")
+    c = db.connect(cfg.db_path)
+    try:
+        csrf = c.execute("SELECT csrf FROM sessions ORDER BY created_at DESC LIMIT 1").fetchone()[0]
+    finally:
+        c.close()
+    client.headers["X-CSRF-Token"] = csrf

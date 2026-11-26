@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "deedup"
-version = "0.6.0"
+version = "0.6.5"
 description = "Duplicate finder for Unraid and other big file hoards: dedupe your hoard, safely."
 readme = "README.md"
 license = "Apache-2.0"
@@ -22,10 +22,11 @@ dependencies = [
   "pyexiftool>=0.5.6",
   "py7zr>=0.22",
   "numpy>=1.26",
+  "argon2-cffi>=23.1",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "httpx>=0.27", "ruff>=0.6,<1"]
+dev = ["pytest>=8", "httpx>=0.27", "ruff>=0.6,<1", "pip-audit>=2.7"]
 
 [project.scripts]
 deedup = "deedup.__main__:main"
@@ -45,5 +46,33 @@ target-version = "py312"
 
 [tool.ruff.lint]
 # Pinned so that `make ci`, GitHub CI and any ruff version check the same rules.
-select = ["E", "F", "W", "I", "B", "UP"]
+# S = the bandit security checks; TID251 = the banned APIs below.
+# See docs/secure-coding.md for the rules (SC1-SC10) these enforce.
+select = ["E", "F", "W", "I", "B", "UP", "S", "TID251"]
 ignore = ["E501"]  # long SQL lines read better unwrapped
+
+[tool.ruff.lint.per-file-ignores]
+# SC5: these modules build SQL from module constants and "?" placeholder lists
+# only; every user value is a bound parameter. Reviewed for M6.5.
+"deedup/{archive_index,changes,db,engine,plans,queries,similar}.py" = ["S608"]
+# SC2: the only module allowed to rename, link or delete files on /mnt.
+"deedup/safepath.py" = ["TID251"]
+# SC3: the only module allowed to start a subprocess (ExifTool).
+"deedup/metadata.py" = ["TID251"]
+"tests/**" = ["S101", "S608", "S105", "S106", "S108", "S311", "S603", "S607", "S103", "TID251"]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"os.system".msg = "SC3: no shell. Use the ExifTool reader in metadata.py."
+"os.popen".msg = "SC3: no shell."
+"subprocess".msg = "SC3: subprocesses only in metadata.py."
+"os.rename".msg = "SC2: move files through deedup.safepath."
+"os.rmdir".msg = "SC2: remove folders through deedup.safepath."
+"os.mkdir".msg = "SC2: make folders on /mnt through deedup.safepath."
+"os.replace".msg = "SC2: move files through deedup.safepath."
+"os.link".msg = "SC2: link files through deedup.safepath."
+"os.unlink".msg = "SC2: delete files through deedup.safepath."
+"os.remove".msg = "SC2: delete files through deedup.safepath."
+"shutil.move".msg = "SC2: move files through deedup.safepath."
+"shutil.rmtree".msg = "SC2: never delete folder trees."
+"pickle".msg = "Never unpickle data; use JSON."
+"marshal".msg = "Never unmarshal data; use JSON."

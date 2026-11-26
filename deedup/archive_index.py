@@ -11,6 +11,7 @@ from collections import defaultdict
 from . import db
 from .archives import ARCHIVE_EXTS, JSON_LIMIT, Member, archive_kind, parse_sidecar, read_archive, takeout_part
 from .hashing import Expected, FileChanged, _open
+from .limits import ArchiveTooLarge
 from .metadata import METADATA_EXTS
 from .scanner import ext_of
 
@@ -88,6 +89,8 @@ def archive_disk(ctx, disk: str, phase: str, rows: list[sqlite3.Row], settings: 
             except FileChanged:
                 st.add(disk, "done_bytes", row["size"])
                 continue  # the next scan will see the change
+            except ArchiveTooLarge as e:
+                members, error = [], str(e)
             except Exception as e:  # noqa: BLE001 - a damaged archive must not stop the scan
                 members, error = [], f"{type(e).__name__}: {e}"[:300]
             store_archive(conn, row, members, ctx.job_id, error)

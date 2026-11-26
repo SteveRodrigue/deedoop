@@ -3,6 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  {# htmx without eval or injected styles, so the Content-Security-Policy can stay strict. #}
+  <meta name="htmx-config" content='{"allowEval": false, "allowScriptTags": false, "includeIndicatorStyles": false}'>
   <title>{% block title %}deedup{% endblock %}</title>
   <script>
     // Apply the saved theme before the first paint, so dark mode never flashes white.
@@ -17,9 +19,10 @@
   <script src="/static/htmx.min.js" defer></script>
   <script src="/static/app.js" defer></script>
 </head>
-<body>
+<body{% if not signed_in %} data-readonly{% endif %}{% if session %} hx-headers='{"X-CSRF-Token": "{{ session.csrf }}"}'{% endif %}>
 <header class="top">
   <a class="brand" href="/"><img src="/static/icon.svg" alt="" width="22" height="22"> deedup</a>
+  {% if signed_in or public_view %}
   <nav>
     <a href="/" class="{{ 'on' if nav == 'dashboard' }}">Dashboard</a>
     <a href="/duplicates" class="{{ 'on' if nav == 'duplicates' }}">Duplicates</a>
@@ -31,8 +34,14 @@
     <a href="/same-path" class="{{ 'on' if nav == 'same_path' }}">Checks</a>
     <a href="/setup" class="{{ 'on' if nav == 'setup' }}">Setup</a>
   </nav>
+  {% endif %}
   {% if gate and gate.open %}<a class="ro on" href="/changes" title="Changes are allowed. Nothing is changed until you confirm it on the Changes screen.">changes allowed</a>
   {% else %}<span class="ro" title="deedup only reads your files: {{ 'changes are turned off in Setup' if not (gate and gate.allowed) else '/mnt is mounted read-only' }}.">read-only</span>{% endif %}
+  {% if session %}
+  <form method="post" action="/logout" class="account" data-public>{% include "_csrf.html" %}
+    <span class="muted small" title="Signed in">{{ session.username }}</span>
+    <button class="secondary small">Sign out</button></form>
+  {% elif nav != 'login' %}<a class="account-link" href="/login?next={{ request.url.path | urlencode }}">Sign in</a>{% endif %}
   <div class="theme" role="group" aria-label="Theme">
     <button type="button" data-theme-choice="system" title="Follow the system setting" aria-label="System theme">
       <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg></button>
@@ -43,6 +52,8 @@
   </div>
 </header>
 <main>
+{% if not signed_in and nav != 'login' %}<p class="banner">You are not signed in, so deedup is read-only. <a href="/login?next={{ request.url.path | urlencode }}">Sign in</a> to make changes.</p>{% endif %}
+{% if signed_in and legacy_password %}<p class="banner warn">The old <span class="mono">Password</span> (DEEDUP_PASSWORD) variable is still set. It became your admin password and is no longer used for anything else: remove it from the container settings.</p>{% endif %}
 {% block content %}{% endblock %}
 </main>
 <footer>deedup {{ version }} · dedupe your hoard, safely</footer>

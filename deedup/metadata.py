@@ -56,6 +56,18 @@ class Media:
     error: str | None = None
 
 
+UNSAFE_NAME = "name not readable by ExifTool (it contains a line break or control character)"
+
+
+def safe_for_exiftool(path: str) -> bool:
+    """A2: ExifTool runs with ``-stay_open`` and reads one argument per line, so
+    a file name with a line break would add options (``-all=`` strips the tags
+    of every file in the batch, ``-w`` writes files). Only absolute paths
+    without control characters are passed; an absolute path never starts with
+    ``-``, so it cannot be read as an option."""
+    return path.startswith("/") and not any(ord(ch) < 32 or ord(ch) == 127 for ch in path)
+
+
 def exiftool_available() -> bool:
     return shutil.which("exiftool") is not None
 
@@ -138,13 +150,19 @@ class Reader:
                 log.debug("exiftool did not stop cleanly", exc_info=True)
 
     def _run(self, paths: list[str]) -> list[dict]:
+        # SC3: every argument is a fixed option or a path checked by safe_for_exiftool.
+        if not all(safe_for_exiftool(p) for p in paths):
+            raise ValueError("unsafe path for ExifTool")  # read() filters them first; never reached
         args = [f"-{t}" for t in TAGS] + ["-j", "-charset", "filename=utf8", *paths]
         out = self._et.execute(*args)
         return json.loads(out) if out else []
 
     def read(self, paths: list[str]) -> dict[str, Media]:
         """Map each path to its :class:`Media`. Unreadable files get ``error``."""
-        result: dict[str, Media] = {}
+        result: dict[str, Media] = {p: Media(error=UNSAFE_NAME) for p in paths if not safe_for_exiftool(p)}
+        paths = [p for p in paths if p not in result]
+        if not paths:
+            return result
         try:
             rows = self._run(paths)
         except Exception as e:  # noqa: BLE001 - fall back to one file at a time

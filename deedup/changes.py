@@ -37,7 +37,7 @@ from pathlib import Path
 
 import blake3
 
-from . import db
+from . import db, safepath
 from .control import Control, Status, Stopped
 from .hashing import Expected, FileChanged, full_hash
 from .scanner import QUARANTINE_DIR
@@ -474,12 +474,25 @@ def _matches(path: str, size: int, mtime_ns: int) -> os.stat_result:
 
 
 def _inside(path: str, mnt: Path) -> None:
-    real = os.path.realpath(os.path.dirname(path))
-    base = os.path.realpath(mnt)
-    if not (real == base or real.startswith(base.rstrip("/") + "/")):
+    try:
+        safepath.check(path)
+    except safepath.UnsafePath:
+        raise Skip("unsafe path") from None
+    if not safepath.inside(os.path.dirname(path), str(mnt)):
         raise Skip(f"outside {mnt}")
-    if "/../" in path or path.endswith("/.."):
-        raise Skip("unsafe path")
+
+
+# Every rename, link and delete below goes through deedup.safepath (rule SC2),
+# which refuses to follow a symbolic link anywhere in the path.
+
+
+def _fs(fn, *args, **kw):
+    try:
+        return fn(*args, **kw)
+    except safepath.Exists:
+        raise Skip("something is already at the destination") from None
+    except safepath.UnsafePath as e:
+        raise Skip(str(e)) from None
 
 
 def _makedirs(path: str) -> list[str]:
@@ -491,7 +504,7 @@ def _makedirs(path: str) -> list[str]:
         missing.append(d)
         d = os.path.dirname(d)
     for m in reversed(missing):
-        os.mkdir(m)
+        _fs(safepath.mkdir, m)
         made.append(m)
     return made
 
@@ -499,22 +512,17 @@ def _makedirs(path: str) -> list[str]:
 def _rmdirs(dirs: list[str]) -> None:
     for d in reversed(dirs):
         try:
-            os.rmdir(d)
+            safepath.rmdir(d)
         except OSError:
             pass  # not empty, or already gone
 
 
 def _rename_noclobber(src: str, dst: str) -> None:
-    if os.path.lexists(dst):
-        raise Skip("something is already at the destination")
-    try:
-        os.link(src, dst)  # fails if dst appeared meanwhile; never overwrites
-    except FileExistsError:
-        raise Skip("something is already at the destination") from None
-    except OSError:
-        os.rename(src, dst)  # filesystems without hardlinks
-        return
-    os.unlink(src)
+    _fs(safepath.rename_noclobber, src, dst)
+
+
+def _unlink(path: str, missing_ok: bool = False) -> None:
+    _fs(safepath.unlink, path, missing_ok=missing_ok)
 
 
 def _hash_file(path: str, size: int, mtime_ns: int, checkpoint) -> bytes:
@@ -566,7 +574,7 @@ def _remove(item: sqlite3.Row, mode: str, mnt: Path, ctl: Control) -> dict:
     _verify_same(item, ctl)
     ctl.checkpoint()
     if mode == "delete":
-        os.unlink(src)
+        _unlink(src)
         return {"note": "deleted"}
     q = item["dst_path"]
     _inside(q, mnt)
@@ -574,11 +582,11 @@ def _remove(item: sqlite3.Row, mode: str, mnt: Path, ctl: Control) -> dict:
     _rename_noclobber(src, q)
     if mode == "hardlink":
         try:
-            os.link(keep, src)
-        except OSError as e:
-            os.rename(q, src)  # put it back
+            _fs(safepath.link, keep, src)
+        except (OSError, Skip) as e:
+            _rename_noclobber(q, src)  # put it back
             _rmdirs(made)
-            raise Skip(f"could not make the hardlink: {e.strerror}") from None
+            raise Skip(f"could not make the hardlink: {getattr(e, 'strerror', None) or e}") from None
         return {"note": "now a hardlink to the kept copy; original in quarantine", "made_dirs": made}
     return {"note": "", "made_dirs": made}
 
@@ -589,7 +597,7 @@ def _copy_verified(src: str, dst: str, size: int, mtime_ns: int, ctl: Control) -
         raise Skip("a leftover partial copy is in the way")
     want = _hash_file(src, size, mtime_ns, ctl.checkpoint)
     try:
-        with open(src, "rb") as fi, open(tmp, "xb") as fo:
+        with open(src, "rb") as fi, _fs(safepath.open_new, tmp) as fo:
             h = blake3.blake3()
             while True:
                 ctl.checkpoint()
@@ -608,7 +616,7 @@ def _copy_verified(src: str, dst: str, size: int, mtime_ns: int, ctl: Control) -
         _rename_noclobber(tmp, dst)
     finally:
         if os.path.lexists(tmp):
-            os.unlink(tmp)
+            _unlink(tmp, missing_ok=True)
 
 
 def _move(item: sqlite3.Row, mnt: Path, ctl: Control) -> dict:
@@ -818,7 +826,7 @@ def _undo_item(a, it, mnt: Path) -> None:
                 raise Skip("the original is no longer in quarantine")
             _makedirs(src)
             _rename_noclobber(q, src)
-            os.unlink(dst)
+            _unlink(dst)
         else:
             _makedirs(src)
             _rename_noclobber(dst, src)
@@ -835,7 +843,7 @@ def _undo_item(a, it, mnt: Path) -> None:
         if ls is not None:
             if (ls.st_dev, ls.st_ino) != (ks.st_dev, ks.st_ino):
                 raise Skip("the hardlink was replaced by another file")
-            os.unlink(src)
+            _unlink(src)
     _makedirs(src)
     _rename_noclobber(q, src)
     _rmdirs(json.loads(it["made_dirs"] or "[]"))
@@ -858,9 +866,9 @@ def run_purge(ctx: RunContext) -> dict:
                 continue
             _inside(q, ctx.mnt)
             try:
-                os.unlink(q)
-            except FileNotFoundError:
-                pass
+                _unlink(q, missing_ok=True)
+            except Skip:
+                continue
             purged += 1
             roots.add(q.split(f"/{QUARANTINE_DIR}/")[0] + f"/{QUARANTINE_DIR}")
             conn.execute("UPDATE action_items SET status = 'purged' WHERE action_id = ? AND seq = ?",
@@ -869,11 +877,11 @@ def run_purge(ctx: RunContext) -> dict:
             top = f"{r}/{a['id']}"
             for d, _subdirs, _files in sorted(os.walk(top, topdown=False), key=lambda x: -len(x[0])):
                 try:
-                    os.rmdir(d)
+                    safepath.rmdir(d)
                 except OSError:
                     pass
             try:
-                os.rmdir(r)
+                safepath.rmdir(r)
             except OSError:
                 pass
         conn.execute("UPDATE actions SET purged_at = ? WHERE id = ?", (time.time(), a["id"]))

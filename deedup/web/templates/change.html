@@ -13,6 +13,7 @@
   <dl class="kv" style="margin-top:10px">
     <dt>How</dt><dd>{{ modes.get(a.mode) if a.kind == "remove" else "Move files to their planned place" }}
       {% if a.plan_id %}· <a href="/plans/{{ a.plan_id }}">the plan</a>{% endif %}</dd>
+    {% if a.username %}<dt>By</dt><dd>{{ a.username }}{% if signed_in and a.ip %} <span class="muted small">from {{ a.ip }}</span>{% endif %}</dd>{% endif %}
     <dt>Started</dt><dd>{{ a.created_at | time }}{% if a.finished_at %}; finished {{ a.finished_at | time }}{% endif %}</dd>
     <dt>Result</dt><dd>{{ "{:,}".format(counts.get("done", 0)) }} done{% if counts.get("skipped") %}, {{ "{:,}".format(counts.skipped) }} skipped{% endif %}{% if counts.get("failed") %}, {{ "{:,}".format(counts.failed) }} failed{% endif %}{% if counts.get("undone") %}, {{ "{:,}".format(counts.undone) }} undone{% endif %}{% if counts.get("purged") %}, {{ "{:,}".format(counts.purged) }} deleted from quarantine{% endif %}{% if counts.get("pending") %}, {{ "{:,}".format(counts.pending) }} waiting{% endif %}
       · {{ a.done_bytes | bytes }}</dd>
@@ -21,10 +22,11 @@
   </dl>
   {% if not a.busy and gate.open %}
   <div class="row" style="margin-top:12px">
-    {% if a.can_undo %}<form method="post" action="/changes/{{ a.id }}/undo"><button class="secondary">Undo this change</button></form>{% endif %}
+    {% if a.can_undo %}<form method="post" action="/changes/{{ a.id }}/undo">{% include "_csrf.html" %}<button class="secondary">Undo this change</button></form>{% endif %}
     {% if a.quarantined %}
-    <form method="post" action="/changes/{{ a.id }}/purge" class="row">
+    <form method="post" action="/changes/{{ a.id }}/purge" class="row">{% include "_csrf.html" %}
       <label class="radio small"><input type="checkbox" name="confirm" value="1"> I understand this deletes {{ "{:,}".format(a.quarantined) }} files for good</label>
+      {% if needs_confirm %}<label class="small">Password <input type="password" name="password" autocomplete="current-password" maxlength="1024" size="14"></label>{% endif %}
       <button class="danger">Empty quarantine</button>
     </form>
     {% endif %}

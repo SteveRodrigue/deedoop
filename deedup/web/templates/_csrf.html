@@ -1,0 +1,2 @@
+{# SC1: every POST form carries the CSRF token of the session. Include this file in each POST form. #}
+{% if session %}<input type="hidden" name="csrf_token" value="{{ session.csrf }}">{% endif %}

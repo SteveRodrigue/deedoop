@@ -9,24 +9,31 @@ permissions:
   contents: read
 
 jobs:
-  # The same script as `make ci` on your machine: lint and tests in the
-  # Docker test stage, the image build, then a smoke test of the image.
+  # The same script as `make ci` on your machine: lint (with the security
+  # rules) and tests in the Docker test stage, pip-audit, the image build,
+  # a Trivy scan of the image, then a locked-down smoke test.
+  # SC9: actions are pinned by commit SHA; Dependabot keeps them current.
   ci:
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       - run: make ci
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         if: github.event_name == 'push'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: push image
+      - name: push image (latest and the version, so you can roll back)
         if: github.event_name == 'push'
         run: |
-          docker tag deedup:ci ghcr.io/steverodrigue/deedup:latest
-          docker push ghcr.io/steverodrigue/deedup:latest
+          version=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+          for tag in latest "$version"; do
+            docker tag deedup:ci "ghcr.io/steverodrigue/deedup:$tag"
+            docker push "ghcr.io/steverodrigue/deedup:$tag"
+          done

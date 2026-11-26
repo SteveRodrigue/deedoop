@@ -11,7 +11,7 @@ from deedup.benchmark import BenchConfig
 from deedup.config import AppConfig
 from deedup.web.app import create_app
 from deedup.worker import Worker, in_window
-from tests.conftest import write
+from tests.conftest import ensure_admin, sign_in, write
 
 
 def wait_idle(client, timeout=20):
@@ -24,9 +24,24 @@ def wait_idle(client, timeout=20):
     raise AssertionError("job did not finish")
 
 
-def make_client(cfg):
+class SignedInClient(TestClient):
+    """A TestClient that signs in as the admin when the ``with`` block starts."""
+
+    def __init__(self, app, cfg, signed_in=True):
+        super().__init__(app)
+        self.cfg, self.signed_in = cfg, signed_in
+
+    def __enter__(self):
+        client = super().__enter__()
+        if self.signed_in:
+            sign_in(client, self.cfg)
+        return client
+
+
+def make_client(cfg, signed_in=True):
+    ensure_admin(cfg)
     worker = Worker(cfg, BenchConfig(seconds_per_test=0.2, bytes_per_test=8 << 20, min_sample_file=1 << 20))
-    return TestClient(create_app(cfg, worker=worker))
+    return SignedInClient(create_app(cfg, worker=worker), cfg, signed_in)
 
 
 def test_end_to_end_setup_scan_report_export(unraid):
@@ -105,13 +120,14 @@ def test_benchmark_job_and_apply(unraid):
         c.close()
 
 
-def test_basic_auth(tmp_path):
+def test_old_password_variable_becomes_the_admin_password(tmp_path):
     (tmp_path / "mnt/user").mkdir(parents=True)
-    cfg = AppConfig(config_dir=tmp_path / "cfg", mnt=tmp_path / "mnt", password="s3cret")
+    cfg = AppConfig(config_dir=tmp_path / "cfg", mnt=tmp_path / "mnt", admin_password="an old long s3cret",
+                    legacy_password_set=True)
     with TestClient(create_app(cfg, start_worker=False)) as client:
-        assert client.get("/").status_code == 401
         assert client.get("/healthz").status_code == 200
-        assert client.get("/", auth=("deedup", "s3cret")).status_code == 200
+        r = client.post("/login", data={"username": "admin", "password": "an old long s3cret"})
+        assert r.status_code == 200 and "DEEDUP_PASSWORD" in r.text  # signed in; asked to remove the variable
 
 
 def test_schedule_window():

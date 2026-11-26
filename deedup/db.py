@@ -297,6 +297,51 @@ MIGRATIONS: list[str] = [
     ) WITHOUT ROWID;
     CREATE INDEX action_items_status ON action_items(action_id, status);
     """,
+    # v7: milestone 6.5, sign-in and audit trail
+    """
+    CREATE TABLE users (
+        id          INTEGER PRIMARY KEY,
+        username    TEXT NOT NULL UNIQUE COLLATE NOCASE,
+        pw_hash     TEXT NOT NULL,            -- Argon2id, never the password
+        created_at  REAL NOT NULL,
+        pw_changed_at REAL NOT NULL
+    );
+    CREATE TABLE sessions (
+        token_hash  BLOB PRIMARY KEY,         -- SHA-256 of the cookie value, never the value
+        user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        csrf        TEXT NOT NULL,
+        created_at  REAL NOT NULL,
+        last_seen   REAL NOT NULL,
+        auth_at     REAL NOT NULL,            -- last time the password was typed
+        ip          TEXT NOT NULL DEFAULT '',
+        user_agent  TEXT NOT NULL DEFAULT ''
+    ) WITHOUT ROWID;
+    CREATE TABLE login_attempts (
+        id          INTEGER PRIMARY KEY,
+        at          REAL NOT NULL,
+        ip          TEXT NOT NULL,
+        username    TEXT NOT NULL,
+        ok          INTEGER NOT NULL
+    );
+    CREATE INDEX login_attempts_ip ON login_attempts(ip, at);
+    CREATE INDEX login_attempts_at ON login_attempts(at);
+    CREATE TABLE lockouts (
+        ip          TEXT PRIMARY KEY,
+        until       REAL NOT NULL,
+        strikes     INTEGER NOT NULL
+    ) WITHOUT ROWID;
+    CREATE TABLE security_log (
+        id          INTEGER PRIMARY KEY,
+        at          REAL NOT NULL,
+        event       TEXT NOT NULL,            -- signin, signin_failed, locked, signout, change, csrf, ...
+        username    TEXT NOT NULL DEFAULT '',
+        ip          TEXT NOT NULL DEFAULT '',
+        detail      TEXT NOT NULL DEFAULT ''
+    );
+    CREATE INDEX security_log_at ON security_log(at);
+    ALTER TABLE actions ADD COLUMN username TEXT NOT NULL DEFAULT '';
+    ALTER TABLE actions ADD COLUMN ip TEXT NOT NULL DEFAULT '';
+    """,
 ]
 
 DEFAULT_SETTINGS: dict[str, Any] = {
@@ -332,6 +377,11 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "allow_changes": False,
     "allow_direct_delete": False,  # removals skip the quarantine (cannot be undone)
     "quarantine_days": 30,         # quarantined files are deleted after this many days; 0 keeps them
+    # Milestone 6.5: what people who are not signed in can see. False: a status
+    # page and the sign-in form only. True: every page, read-only.
+    "public_view": False,
+    # Host names the web UI answers to (DNS-rebinding guard). Empty: any.
+    "allowed_hosts": [],
     "schedule_enabled": False,
     "schedule_start": "01:00",
     "schedule_end": "07:00",

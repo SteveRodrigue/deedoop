@@ -53,12 +53,12 @@
   {% if not settings.image_matching %}<p class="flash err">Photo matching is turned off on the Setup screen.</p>{% endif %}
   {% endif %}
   {% if total and flt.method != "similar" %}
-  <form method="post" action="/marks/bulk" class="row bulk">
+  <form method="post" action="/marks/bulk" class="row bulk">{% include "_csrf.html" %}
     <input type="hidden" name="method" value="{{ flt.method }}"><input type="hidden" name="category" value="{{ flt.category }}">
     <input type="hidden" name="q" value="{{ flt.q }}"><input type="hidden" name="min_mb" value="{{ min_mb }}">
     <input type="hidden" name="disk" value="{{ flt.disk }}"><input type="hidden" name="back" value="{{ back }}">
     <span class="small">In all {{ "{:,}".format(total) }} groups shown, keep</span>
-    <select name="rule" onchange="this.form.text.hidden = this.value != 'path'">
+    <select name="rule" data-change="toggle-path-text">
       {% for k, v in keeper_rules.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}
     </select>
     <input type="text" name="text" placeholder="e.g. /mnt/user/Photos" hidden>
@@ -84,9 +84,9 @@
     {% if gm %}<span class="pill warn">{{ gm | length }} marked</span>{% endif %}
     <span class="path muted" title="{{ ms[0].user_path }}">{{ ms[0].user_path }}</span>
   </summary>
-  <form id="keep-{{ g.id }}" method="post" action="/marks/group"><input type="hidden" name="group_id" value="{{ g.id }}">
+  <form id="keep-{{ g.id }}" method="post" action="/marks/group">{% include "_csrf.html" %}<input type="hidden" name="group_id" value="{{ g.id }}">
     <input type="hidden" name="back" value="{{ back }}"></form>
-  <form id="clear-{{ g.id }}" method="post" action="/marks/group/{{ g.id }}/clear"><input type="hidden" name="back" value="{{ back }}"></form>
+  <form id="clear-{{ g.id }}" method="post" action="/marks/group/{{ g.id }}/clear">{% include "_csrf.html" %}<input type="hidden" name="back" value="{{ back }}"></form>
   {% if photo_grid %}
   <div class="photos" style="margin-top:10px">
     {% for m in ms %}
