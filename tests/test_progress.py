@@ -109,7 +109,7 @@ def test_scan_log_records_phases_and_unreadable_files(unraid, monkeypatch):
             # the status card links to it
             assert "/log?job=" in client.get("/").text
     finally:
-        os.chmod(locked, 0o755)
+        os.chmod(locked, 0o700)
 
 
 def test_scan_log_lines_are_one_line_and_bounded():
@@ -186,7 +186,7 @@ def test_your_certificate_wins_and_a_broken_one_falls_back(tmp_path):
     tls.make_self_signed(cfg.tls_cert, cfg.tls_key, ["nas.example.com"])
     info = tls.prepare(cfg)
     assert info.source == "yours" and info.names == ["nas.example.com"] and not info.problems
-    os.chmod(cfg.tls_key, 0o644)
+    os.chmod(cfg.tls_key, 0o640)
     assert any("chmod 600" in p for p in tls.prepare(cfg).problems)
     cfg.tls_key.write_text("not a key")
     info = tls.prepare(cfg)
