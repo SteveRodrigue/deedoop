@@ -58,7 +58,7 @@ COMMON_PASSWORDS = frozenset("""
 qwertyuiopas qwertyuiop12 qwertyuiop123 1q2w3e4r5t6y 1qaz2wsx3edc qazwsxedcrfv asdfghjkl123
 passwordpassword password1234 password12345 password123456 passw0rd1234 p@ssw0rd1234 Password1234
 password123! Password123! iloveyou1234 letmein12345 welcome12345 changeme1234 administrator
-admin1234567 adminadmin12 adminpassword unraid123456 unraidunraid deedoopdeedoop deedoop123456 deedupdeedup deedup123456
+admin1234567 adminadmin12 adminpassword unraid123456 unraidunraid deedoopdeedoop deedoop123456
 abcdefghijkl abcd12345678 aaaaaaaaaaaa monkey123456 football1234 baseball1234 superman1234
 trustno1trustno1 sunshine1234 princess1234 dragon123456 master123456 shadow123456
 """.lower().split())

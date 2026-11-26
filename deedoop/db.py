@@ -425,7 +425,6 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "#recycle",
         "@eaDir",
         ".deedoop-quarantine",
-        ".deedup-quarantine",
     ],
     # Folders holding Google Takeout or other archives. Archives in them are
     # opened and their contents indexed.
