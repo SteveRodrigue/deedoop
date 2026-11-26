@@ -39,6 +39,10 @@ def index_stats(conn: sqlite3.Connection, db_path: Path) -> dict:
         "SELECT COUNT(*) AS groups, COALESCE(SUM(wasted), 0) AS wasted, COALESCE(SUM(pending), 0) AS pending "
         "FROM groups WHERE method = 'similar'"
     ).fetchone()
+    gms = conn.execute(
+        "SELECT COUNT(*) AS groups, COALESCE(SUM(wasted), 0) AS wasted, COALESCE(SUM(pending), 0) AS pending "
+        "FROM groups WHERE method = 'media_similar'"
+    ).fetchone()
     total = conn.execute(f"WITH eff AS ({EFFECTIVE_GROUPS}) SELECT COALESCE(SUM(wasted), 0) FROM eff").fetchone()[0]
     media = conn.execute("SELECT COUNT(*), COUNT(taken_at) FROM media").fetchone()
     hashed = conn.execute("SELECT COUNT(*) FROM hashes WHERE kind = 'blake3'").fetchone()[0]
@@ -61,6 +65,8 @@ def index_stats(conn: sqlite3.Connection, db_path: Path) -> dict:
         "media_groups": gm["groups"], "media_wasted": gm["wasted"], "videos": avc[0], "songs": avc[1],
         "media": media[0], "media_dated": media[1],
         "similar_groups": gs["groups"], "similar_wasted": gs["wasted"], "similar_pending": gs["pending"],
+        "media_similar_groups": gms["groups"], "media_similar_wasted": gms["wasted"],
+        "media_similar_pending": gms["pending"],
         "archives": arch[0], "archive_members": arch[1], "archive_new": arch[2],
     }
 
@@ -207,7 +213,7 @@ def group_members(conn: sqlite3.Connection, group_ids: list[int]) -> dict[int, l
                    md.taken_at, md.camera, COALESCE(md.width, av.width) AS width,
                    COALESCE(md.height, av.height) AS height, md.gps_lat, md.gps_lon, {CONTAINER_COLS},
                    av.artist, av.album, av.title, av.track, av.year, av.genre, av.has_cover, av.tags AS tag_count,
-                   av.container, av.duration, av.vcodec, av.acodec, av.bitrate,
+                   av.container, av.duration, av.vcodec, av.acodec, av.bitrate, av.kind,
                    (SELECT value FROM hashes h WHERE h.file_id = f.id AND h.kind = 'blake3') AS full
             FROM group_members m JOIN groups g ON g.id = m.group_id
             JOIN files f ON f.id = m.file_id JOIN roots r ON r.id = f.root_id
@@ -243,6 +249,8 @@ def group_members(conn: sqlite3.Connection, group_ids: list[int]) -> dict[int, l
             "container": container_label(r["container"], r["ext"]),
             "codecs": " + ".join(c for c in (r["vcodec"], r["acodec"]) if c) or None,
             "duration": fmt_duration(r["duration"]),
+            "seconds": r["duration"], "kind": r["kind"], "vcodec": r["vcodec"], "acodec": r["acodec"],
+            "bitrate": r["bitrate"], "kbps": f"{r['bitrate'] // 1000:,} kb/s" if r["bitrate"] else None,
         })
     for members in out.values():
         seen: dict[tuple, int] = {}
@@ -261,7 +269,8 @@ def group_members(conn: sqlite3.Connection, group_ids: list[int]) -> dict[int, l
 
 
 DIFF_FIELDS = ("size", "taken_at", "camera", "dims", "gps", "full",
-               "artist", "album", "title", "track", "year", "genre", "cover", "container")
+               "artist", "album", "title", "track", "year", "genre", "cover", "container",
+               "duration", "codecs", "kbps")
 # What a "Same recording, other tags" group shows for each copy.
 MEDIA_FIELDS = (("title", "title"), ("artist", "artist"), ("album", "album"), ("track", "track"),
                 ("year", "year"), ("genre", "genre"), ("cover", "cover art"), ("taken_at", "date"),
@@ -275,6 +284,10 @@ def suggested_rank(m) -> tuple:
         from .media_index import media_rank
 
         return media_rank(m)
+    if m["method"] == "media_similar":
+        from .media_similar import keeper_rank as media_keeper
+
+        return media_keeper(m)
     from .similar import keeper_rank
 
     return keeper_rank(m)
@@ -850,3 +863,55 @@ def music(conn: sqlite3.Connection, flt: BrowseFilter) -> dict:
         a["year"] = a["year"] or r["year"]
         a["tracks"].append(_file_view(r))
     return {"artists": [], "albums": list(albums.values()), "base": base}
+
+
+# -- re-encoded songs and videos: review (milestone 8) ------------------------------------
+
+
+def _recording(conn: sqlite3.Connection, file_id: int) -> dict | None:
+    r = conn.execute(
+        f"SELECT {FILE_COLUMNS}, av.kind, av.container, av.bitrate, av.channels, av.sample_rate, av.fps, "
+        f"av.tags AS tag_count, av.duration AS seconds {BROWSE_JOINS} WHERE f.id = ?",
+        (file_id,),
+    ).fetchone()
+    if r is None or r["kind"] is None:
+        return None
+    v = _file_view(r)
+    v.update(kind=r["kind"], ext=r["ext"], vcodec=r["vcodec"], acodec=r["acodec"], width=r["width"], height=r["height"],
+             bitrate=r["bitrate"], seconds=r["seconds"], tag_count=r["tag_count"] or 0,
+             folder=v["user_path"].rsplit("/", 1)[0],
+             container=container_label(r["container"], r["ext"]),
+             kbps=f"{r['bitrate'] // 1000:,} kb/s" if r["bitrate"] else None,
+             audio=", ".join(x for x in (
+                 f"{r['sample_rate'] / 1000:g} kHz" if r["sample_rate"] else "",
+                 {1: "mono", 2: "stereo"}.get(r["channels"], f"{r['channels']} channels" if r["channels"] else ""))
+                 if x) or None,
+             fps=f"{r['fps']:g} fps" if r["fps"] else None)
+    return v
+
+
+def media_pair_view(conn: sqlite3.Connection, pair: sqlite3.Row) -> dict | None:
+    """Both copies of a re-encoded pair, the fields that differ and the suggested keeper."""
+    from .media_similar import keeper_rank
+
+    a, b = _recording(conn, pair["a"]), _recording(conn, pair["b"])
+    if a is None or b is None:
+        return None
+    differs = {k for k in ("size", "length", "codecs", "kbps", "dims", "audio", "fps", "container", "title",
+                           "artist", "album", "name", "folder") if a[k] != b[k]}
+    hints = []
+    if a["name"].rsplit(".", 1)[0].lower() == b["name"].rsplit(".", 1)[0].lower():
+        hints.append("same name")
+    if a["title"] and a["title"] == b["title"]:
+        hints.append("same title")
+    if pair["offset"]:
+        hints.append(f"{abs(pair['offset']):g} s offset")
+    kept = None
+    if pair["decision"] in ("keep_a", "keep_b") and pair["keep"] is not None:
+        kept = a["name"] if pair["keep"] == pair["ka"] else b["name"]
+    score = round(100 * pair["score"])
+    return {"a": a, "b": b, "kind": pair["kind"], "score": score, "offset": pair["offset"], "hints": hints,
+            "differs": differs, "keeper": "a" if keeper_rank(a) >= keeper_rank(b) else "b", "kept": kept,
+            "decision": pair["decision"], "decided_at": pair["decided_at"],
+            "strength": "close" if score >= 95 else "likely" if score >= (90 if pair["kind"] == "audio" else 75)
+            else "loose"}

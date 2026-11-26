@@ -165,6 +165,8 @@ PHASE_NAMES = {
     "hash_stream": "Hashing video and audio streams", "hash_partial": "Quick hashing same-size files",
     "hash_full": "Full hashing likely duplicates", "group": "Building duplicate groups", "done": "Finishing",
     "changes": "Changing files", "undo": "Undoing",
+    "fp_audio": "Fingerprinting songs", "fp_video": "Fingerprinting videos",
+    "media_pairs": "Finding re-encoded songs and videos",
 }
 
 
@@ -206,7 +208,7 @@ def progress_view(live: dict, now: float, last_walked: int = 0) -> dict:
     """
     plan: list[str] = live.get("plan") or []
     phase = live.get("phase") or ""
-    key = phase if phase in plan else ("group" if phase in ("similar", "done") and "group" in plan else "")
+    key = phase if phase in plan else ("group" if phase in ("similar", "media_pairs", "done") and "group" in plan else "")
     out: dict[str, Any] = {"plan": [{"key": p, "name": phase_name(p)} for p in plan],
                            "phase_no": plan.index(key) + 1 if key else 0, "phase_count": len(plan),
                            "phase_name": phase_name(phase) if phase else "", "pct": None, "eta": "",

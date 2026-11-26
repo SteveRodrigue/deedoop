@@ -30,6 +30,8 @@
     <div class="muted small">files, {{ stats.bytes | bytes }}; {{ "{:,}".format(stats.media) }} with metadata{% if stats.videos or stats.songs %}, {{ "{:,}".format(stats.videos) }} videos, {{ "{:,}".format(stats.songs) }} songs{% endif %}</div></div>
   {% if stats.similar_groups %}<div class="tile"><a href="/review" class="label">Similar photos</a><div class="value">{{ "{:,}".format(stats.similar_pending) }}</div>
     <div class="muted small">pairs to review; {{ stats.similar_wasted | bytes }} possible, not counted above</div></div>{% endif %}
+  {% if stats.media_similar_groups %}<div class="tile"><a href="/review?kind=media" class="label">Re-encoded songs and videos</a><div class="value">{{ "{:,}".format(stats.media_similar_pending) }}</div>
+    <div class="muted small">pairs to review; {{ stats.media_similar_wasted | bytes }} possible, not counted above</div></div>{% endif %}
   {% if stats.archives %}<div class="tile"><a href="/archives" class="label">Archives</a><div class="value">{{ "{:,}".format(stats.archives) }}</div>
     <div class="muted small">{{ "{:,}".format(stats.archive_members) }} files inside, {{ "{:,}".format(stats.archive_new) }} not on disk yet</div></div>{% endif %}
   <div class="tile"><div class="label">Index size</div><div class="value">{{ stats.index_bytes | bytes }}</div>

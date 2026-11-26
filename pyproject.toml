@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "deedup"
-version = "0.7.5"
+version = "0.8.0"
 description = "Duplicate finder for Unraid and other big file hoards: dedupe your hoard, safely."
 readme = "README.md"
 license = "Apache-2.0"
@@ -54,8 +54,8 @@ ignore = ["E501"]  # long SQL lines read better unwrapped
 
 [tool.ruff.lint.per-file-ignores]
 # SC5: these modules build SQL from module constants and "?" placeholder lists
-# only; every user value is a bound parameter. Reviewed for M6.5 (media_index for M7).
-"deedup/{archive_index,changes,db,engine,media_index,plans,queries,similar}.py" = ["S608"]
+# only; every user value is a bound parameter. Reviewed for M6.5 (media_index for M7, media_similar for M8).
+"deedup/{archive_index,changes,db,engine,media_index,media_similar,plans,queries,similar}.py" = ["S608"]
 # SC2: the only module allowed to rename, link or delete files on /mnt.
 "deedup/safepath.py" = ["TID251"]
 # SC3: the only modules allowed to start a subprocess: ExifTool (metadata.py)

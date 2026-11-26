@@ -18,7 +18,7 @@ import sqlite3
 import time
 from collections import defaultdict
 
-from . import av, db, scanners
+from . import av, db, media_similar, scanners
 from .categories import group_category
 
 FLUSH = 50
@@ -39,6 +39,7 @@ def after_hashes(scan) -> None:
         return
     scan.run_phase("hash_stream", stream_candidates(scan.conn, scanners.media_exts(scan.settings), scan.min_size),
                    stream_disk)
+    media_similar.fingerprint(scan)  # milestone 8: re-encoded copies
 
 
 def group(scan) -> dict:
@@ -46,13 +47,14 @@ def group(scan) -> dict:
         return {}
     res = rebuild_media_groups(scan.conn, scanners.media_exts(scan.settings), scan.min_size)
     _drop_stale_marks(scan.conn)
-    return {"media_groups": res["groups"], "media_wasted": res["wasted"]}
+    return {"media_groups": res["groups"], "media_wasted": res["wasted"], **media_similar.group(scan)}
 
 
 def drop(scan) -> None:
     if not scanners.media_kinds(scan.settings):
         scan.conn.execute("DELETE FROM groups WHERE method = 'media'")
         _drop_stale_marks(scan.conn)
+        media_similar.drop(scan.conn)
 
 
 def _drop_stale_marks(conn: sqlite3.Connection) -> None:

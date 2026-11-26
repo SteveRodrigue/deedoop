@@ -191,6 +191,14 @@ body[data-readonly] form[method=post]:not([data-public]) button[disabled] { curs
 table.log td { white-space: nowrap; }
 table.log td.detail { white-space: normal; }
 
+/* Milestone 8: review of songs and videos. */
+.tabs.kinds { border-bottom: 0; margin-bottom: 8px; gap: 6px; }
+.tabs.kinds a { border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px; margin: 0; }
+.tabs.kinds a.on { border-color: var(--accent); }
+.side video.player, .side .poster { width: 100%; aspect-ratio: 16 / 9; object-fit: contain; display: block; }
+.side audio.player { width: 100%; }
+.sub.inline { margin-top: 12px; }
+
 /* Milestone 7.5: HTTPS card, scan progress and the scan log. */
 .flash.warn { border: 1px solid var(--warn); color: var(--warn); }
 .warn-text { color: var(--warn); }

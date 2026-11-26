@@ -102,7 +102,9 @@ def require_open(conn: sqlite3.Connection, mnt: Path) -> None:
 
 MEMBER_SQL = """
     SELECT m.group_id, f.id, f.size, f.mtime_ns, f.dev, f.inode, f.container_id, f.dir, f.name,
-           r.path AS root_path, r.user_path, md.width, md.height, md.taken_at, g.method, av.tags AS tag_count
+           r.path AS root_path, r.user_path, COALESCE(md.width, av.width) AS width,
+           COALESCE(md.height, av.height) AS height, md.taken_at, g.method, av.tags AS tag_count,
+           av.kind, av.vcodec, av.acodec, av.bitrate, av.duration AS seconds
     FROM group_members m JOIN groups g ON g.id = m.group_id
     JOIN files f ON f.id = m.file_id JOIN roots r ON r.id = f.root_id
     LEFT JOIN media md ON md.file_id = f.id LEFT JOIN av ON av.file_id = f.id
@@ -184,9 +186,9 @@ def mark_groups(conn: sqlite3.Connection, group_ids: list[int], rule: str, text:
     marked = kept = left = 0
     with db.Tx(conn):
         for _gid, members in groups.items():
-            if members[0]["method"] == "similar":
+            if members[0]["method"] in ("similar", "media_similar"):
                 left += 1
-                continue  # similar photos are decided one by one in Review
+                continue  # similar photos, songs and videos are decided one by one in Review
             keeper = pick_keeper(members, rule, text)
             if keeper is None:
                 left += 1
@@ -212,18 +214,34 @@ def review_removals(conn: sqlite3.Connection, threshold: int) -> list[tuple[int,
     return out
 
 
-def mark_reviewed(conn: sqlite3.Connection, threshold: int) -> int:
-    pairs = review_removals(conn, threshold)
-    keepers = {k for _, k in pairs}
+def all_review_removals(conn: sqlite3.Connection, settings: dict, threshold: int) -> list[tuple[int, int, str]]:
+    """(remove, keep, method) from Review: similar photos and, with milestone 8,
+    re-encoded songs and videos, each while its matching is on."""
+    out: list[tuple[int, int, str]] = []
+    if settings.get("similar_matching"):
+        out += [(rm, keep, "similar") for rm, keep in review_removals(conn, threshold)]
+    from . import scanners
+
+    if "media_similar" in scanners.methods(settings):
+        from .media_similar import removals
+
+        out += [(rm, keep, "media_similar") for rm, keep in removals(conn)]
+    return out
+
+
+def mark_reviewed(conn: sqlite3.Connection, threshold: int, settings: dict | None = None) -> int:
+    settings = settings or {"similar_matching": True}
+    pairs = all_review_removals(conn, settings, threshold)
+    keepers = {k for _, k, _ in pairs}
     now = time.time()
     n = 0
     with db.Tx(conn):
-        for rm, keep in pairs:
+        for rm, keep, method in pairs:
             if rm in keepers:
                 continue  # kept in another decision: never remove a copy you chose to keep
             conn.execute("DELETE FROM marks WHERE file_id = ?", (keep,))
-            conn.execute("INSERT OR REPLACE INTO marks(file_id, keep_id, method, marked_at) VALUES (?, ?, 'similar', ?)",
-                         (rm, keep, now))
+            conn.execute("INSERT OR REPLACE INTO marks(file_id, keep_id, method, marked_at) VALUES (?, ?, ?, ?)",
+                         (rm, keep, method, now))
             n += 1
     return n
 
@@ -269,10 +287,11 @@ def marked(conn: sqlite3.Connection, limit: int = 0, offset: int = 0) -> list[di
 def marks_summary(conn: sqlite3.Connection) -> dict:
     r = conn.execute("""SELECT COUNT(*) AS n, COALESCE(SUM(f.size), 0) AS bytes,
                                SUM(mk.method = 'exact') AS exact, SUM(mk.method = 'image') AS image,
-                               SUM(mk.method = 'similar') AS similar, SUM(mk.method = 'media') AS media
+                               SUM(mk.method = 'similar') AS similar, SUM(mk.method = 'media') AS media,
+                               SUM(mk.method = 'media_similar') AS media_similar
                         FROM marks mk JOIN files f ON f.id = mk.file_id""").fetchone()
     return {"files": r["n"], "bytes": r["bytes"], "exact": r["exact"] or 0, "image": r["image"] or 0,
-            "similar": r["similar"] or 0, "media": r["media"] or 0}
+            "similar": r["similar"] or 0, "media": r["media"] or 0, "media_similar": r["media_similar"] or 0}
 
 
 def marked_in_groups(conn: sqlite3.Connection, group_ids: list[int]) -> dict[int, set[int]]:
@@ -564,8 +583,8 @@ def _verify_same(item: sqlite3.Row, ctl: Control) -> None:
             raise Skip("could not check the two recordings again")
         if va != vb:
             raise Skip("the two files no longer hold the same recording")
-    # similar: you looked at both photos in Review; the checks above (unchanged,
-    # kept copy present) still apply.
+    # similar, media_similar: you looked at or listened to both copies in Review;
+    # the checks above (unchanged, kept copy present) still apply.
 
 
 def _remove(item: sqlite3.Row, mode: str, mnt: Path, ctl: Control) -> dict:

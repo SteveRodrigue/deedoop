@@ -68,20 +68,23 @@ REGISTRY: dict[str, Scanner] = {s.key: s for s in [
     Scanner(
         key="video", label="Videos",
         finds="Same video with other tags, dates or container (for example MKV remuxed to MP4); codec, "
-              "resolution and duration in Browse.",
-        cost="Reads video headers; reads in full only videos that share a length and stream layout with another.",
-        methods=("media",), tools=("ffprobe", "ffmpeg"), exts=frozenset(exts_for("video")),
+              "resolution and duration in Browse; re-encoded copies (smaller or converted) for you to review.",
+        cost="Reads video headers; reads in full only videos that share a length and stream layout with another; "
+             "decodes 12 frames of each video for re-encoded copies.",
+        methods=("media", "media_similar"), tools=("ffprobe", "ffmpeg"), exts=frozenset(exts_for("video")),
         index="deedup.media_index:index", after_hashes="deedup.media_index:after_hashes",
-        index_phases=("probe",), after_phases=("hash_stream",),
+        index_phases=("probe",), after_phases=("hash_stream", "fp_video"), plan="deedup.media_similar:plan",
         group="deedup.media_index:group", drop="deedup.media_index:drop",
     ),
     Scanner(
         key="audio", label="Music and audio",
-        finds="Same song with other tags or cover art; artist, album and codec in Browse, with a music view.",
-        cost="Reads audio headers; reads in full only songs that share a length and stream layout with another.",
-        methods=("media",), tools=("ffprobe", "ffmpeg"), exts=frozenset(exts_for("audio")),
+        finds="Same song with other tags or cover art; artist, album and codec in Browse, with a music view; "
+              "re-encoded copies (a FLAC and its MP3) for you to review.",
+        cost="Reads audio headers; reads in full only songs that share a length and stream layout with another; "
+             "decodes the first two minutes of each song for re-encoded copies.",
+        methods=("media", "media_similar"), tools=("ffprobe", "ffmpeg"), exts=frozenset(exts_for("audio")),
         index="deedup.media_index:index", after_hashes="deedup.media_index:after_hashes",
-        index_phases=("probe",), after_phases=("hash_stream",),
+        index_phases=("probe",), after_phases=("hash_stream", "fp_audio"), plan="deedup.media_similar:plan",
         group="deedup.media_index:group", drop="deedup.media_index:drop",
     ),
     Scanner(
@@ -98,6 +101,7 @@ METHOD_LABELS = {
     "image": "Same photo, different metadata",
     "media": "Same recording, other tags",
     "similar": "Similar photos",
+    "media_similar": "Re-encoded songs and videos",
 }
 
 
@@ -131,6 +135,10 @@ def methods(settings: dict) -> list[str]:
             on.add("similar")
     if media_kinds(settings):
         on.add("media")
+        from .media_similar import kinds_on
+
+        if kinds_on(settings):
+            on.add("media_similar")
     return [m for m in METHOD_LABELS if m in on]
 
 
