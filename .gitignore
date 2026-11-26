@@ -9,3 +9,5 @@ dist/
 *.db
 *.db-wal
 *.db-shm
+.local-exiftool/
+.ca-local.crt

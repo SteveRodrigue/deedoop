@@ -59,7 +59,11 @@ document.addEventListener("input", function (ev) {
 
 // Signed out: forms that would change something are shown, but disabled.
 function deedupReadonly() {
-  document.querySelectorAll("body[data-readonly] form[method=post]:not([data-public]) button").forEach(function (b) {
+  if (!document.body.hasAttribute("data-readonly")) return;
+  // b.form also finds buttons outside their form (form="..." attribute).
+  document.querySelectorAll("button, input[type=submit]").forEach(function (b) {
+    var f = b.form;
+    if (!f || (f.getAttribute("method") || "").toLowerCase() !== "post" || f.hasAttribute("data-public")) return;
     b.disabled = true;
     b.title = "Sign in to change this";
   });

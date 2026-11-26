@@ -496,3 +496,10 @@ def test_csv_cells_cannot_be_formulas():
     for v in ("+1", "-1", "@SUM(A1)", "\tx", "\rx"):
         assert csv_cell(v).startswith("'")
     assert csv_cell("IMG_1.jpg") == "IMG_1.jpg" and csv_cell(5) == 5
+
+
+def test_no_extractall():
+    """SC4: nothing in deedup extracts an archive to disk."""
+    src = Path(__file__).parent.parent / "deedup"
+    for f in src.rglob("*.py"):
+        assert "extractall" not in f.read_text(), f

@@ -4,9 +4,9 @@
 
 deedup finds the duplicates other tools miss on your Unraid server: identical files with different names, photos that differ only in their metadata, re-compressed copies, and the contents of Google Takeout zips you've already got on disk. It indexes your terabytes incrementally, one disk at a time, and shows you everything before touching a single file.
 
-## Status: milestone 6
+## Status: milestone 6.5
 
-deedup finds **exact duplicates of any file type**, **photos that differ only in their metadata** and **similar photos** (recompressed or resized copies, which you review), looks **inside zip, tar and 7z archives and Google Takeout**, reports what it finds, **plans reorganisations** you can preview, and, once you allow it, **removes duplicates and applies plans** with a quarantine and undo. It is **read-only by default**: nothing changes until you turn on changes in Setup, mount `/mnt` read-write, and confirm each list of changes.
+deedup finds **exact duplicates of any file type**, **photos that differ only in their metadata** and **similar photos** (recompressed or resized copies, which you review), looks **inside zip, tar and 7z archives and Google Takeout**, reports what it finds, **plans reorganisations** you can preview, and, once you allow it, **removes duplicates and applies plans** with a quarantine and undo. It is **read-only by default**: nothing changes until you sign in as the admin, turn on changes in Setup, mount `/mnt` read-write, and confirm each list of changes. Signed out, deedup can only be looked at, never changed.
 
 | Milestone | What it adds | Status |
 |---|---|---|
@@ -16,7 +16,9 @@ deedup finds **exact duplicates of any file type**, **photos that differ only in
 | M4 | Similar photos (recompressed, resized, "Storage saver") with a review queue | done |
 | M5 | Browse and plan reorganisation (preview only) | done |
 | Gate | Write access to `/mnt` is turned on only with your OK | done |
-| M6 | Move and delete: quarantine with undo, opt-in direct delete, hardlinks, apply plans | this release |
+| M6 | Move and delete: quarantine with undo, opt-in direct delete, hardlinks, apply plans | done |
+| M6.5 | Hardening and sign-in: read-only unless signed in, CSRF, security rules enforced in CI | this release |
+| M7, M8 | Video and audio | next |
 
 ## What it does
 
@@ -34,6 +36,7 @@ deedup finds **exact duplicates of any file type**, **photos that differ only in
 - **Similar photos** (milestone 4). Every photo, loose or inside an archive, gets two 64-bit perceptual hashes (pHash and dHash) computed on a small greyscale copy with its EXIF rotation applied, so a Google "Storage saver" copy, a resized export or a re-saved JPEG still matches its original. Close pairs are found with multi-index hashing, which takes roughly one to two minutes per million photos. The **Review** screen shows each pair side by side with the fields that differ highlighted, the distance, supporting hints (same date taken, same shape, same name) and a suggested keeper (highest resolution, then largest file, then earliest date). Answer with the keyboard: **K** keep left, **J** keep right, **B** same photo but keep both, **N** not the same photo, **S** decide later. Decisions are stored against the photos' image data, so they survive rescans, renames and moves, and a pair marked "not the same photo" never comes back. Nothing is moved or deleted; the decisions are used by milestone 6. Similar matches are suggestions and are not counted in the reclaimable total. The match closeness (0 to 10, default 8) is set on the Review or Setup screen. In the Archives screen, Takeout photos that exist on disk only as a similar copy are counted apart.
 - **Plan a reorganisation** (milestone 5). From any folder or filtered search in Browse, choose **Reorganize these files** and write a move rule such as `Photos/{year}/{month}/{name}` (tokens: `{name}`, `{stem}`, `{ext}`, `{year}`, `{month}`, `{day}`, `{date}`, `{camera}`, `{folder}`, `{parent}`, `{share}`; presets included). The preview shows where every file would go and sorts them into: will move, will copy (a device outside the array), renamed because the name is taken (`name (1).jpg`), already in place, already there with the same content, conflicts and skipped, with a count per destination folder. Dates come from EXIF or the Takeout JSON; photos without one go to an `Undated` folder, use their modified date, or stay put, as you choose. Moves are **disk-aware**: a file on disk2 going to another share stays on disk2 (`/mnt/disk2/Backups/…` → `/mnt/disk2/Photos/…`), a rename that copies nothing and fills no other disk, and a name already used on any disk of the share counts as taken. Save a plan to keep the list of moves, check it again later against the index (files that changed since are marked) and export it as CSV. **Nothing is moved**: milestone 6 applies saved plans after you confirm.
 - **Remove duplicates and apply plans** (milestone 6). Off until you tick **Allow changes** on the Setup screen *and* give the container read-write access to `/mnt`; the header shows which. In **Duplicates**, pick the copy to keep in each group (the suggested one is preselected), or mark every group shown by your filters at once, keeping the suggested, oldest, newest or shortest-path copy, or the one whose path contains some text. "Keep left / right" decisions from **Review** are added with one click. Everything you mark lands on the **Changes** screen, with the kept copy shown under each file, and nothing happens until you confirm there. Removals go to a **quarantine** by default: the file is renamed into a hidden `.deedup-quarantine` folder inside the same share folder on the same disk, so it is instant, copies nothing and creates no Unraid share. Exact copies on the same disk can instead be **replaced with a hardlink** to the kept copy. **Delete permanently** is opt-in and asks you to type DELETE. Just before touching each file, deedup checks it again: unchanged since the scan, the kept copy still there and not the same file, and for exact copies both are read and hashed again (for "same photo, other metadata", both images are compared again). Anything that fails a check is skipped with the reason. A saved **plan** is applied from its page: files on the same disk are renamed, files from another device are copied, verified and the original goes to quarantine, and a destination that became taken is skipped. Every change is journaled: **Undo** puts files back, **Empty quarantine** deletes them for good, and quarantined files are deleted automatically after 30 days (configurable, or never). The quarantine is never scanned.
+- **Sign-in and read-only mode** (milestone 6.5). One admin account. Signed out, deedup never changes anything: every change (files, marks, review decisions, plans, settings, scans) needs the signed-in admin. An admin switch decides what signed-out visitors see: just the scan status and the sign-in form (the default), or every page read-only. On first start, the admin is created with a one-time **setup code** from the container log, so nobody else on your network can claim it. Passwords are hashed with Argon2id; sessions are cookies that expire after 8 hours idle or 7 days; five wrong passwords lock that address for 15 minutes (doubling each time), without locking you out from your other devices. Turning on changes or permanent delete, permanent delete and emptying the quarantine ask for the password again after 10 minutes. Setup shows a security log of sign-ins and changes. See [SECURITY.md](SECURITY.md).
 - **Light and dark themes.** Follows your system setting, or pick Light or Dark in the header; the choice is remembered per browser.
 - **Checks.** Files that exist at the same path on two disks (Unraid shows only one of them in `/mnt/user`), and files that could not be read.
 
@@ -43,7 +46,8 @@ Until deedup is in Community Applications, add it with the template in this repo
 
 1. Copy [`unraid/deedup.xml`](unraid/deedup.xml) to `/boot/config/plugins/dockerMan/templates-user/my-deedup.xml` on your server.
 2. In the Docker tab, click **Add Container**, pick **deedup** from the template list, check the paths and click **Apply**.
-3. Open `http://<server>:8080`, go to **Setup**, tick your shares, then start a scan from the **Dashboard**.
+3. Open the container's **Logs** and copy the setup code, then open `http://<server>:8080`, enter the code and create the admin account. (Or set **Admin password (first run only)** in the template.)
+4. Go to **Setup**, tick your shares, then start a scan from the **Dashboard**.
 
 The template maps:
 
@@ -53,15 +57,18 @@ The template maps:
 | `/config` | `/mnt/user/appdata/deedup` | read-write (index database) |
 | `8080` | `8080` | web UI |
 
-To let deedup remove duplicates or apply plans, edit the container, set the `/mnt` path's access mode to **Read/Write - Slave**, then tick **Allow changes** on the Setup screen. Both are needed; until then deedup cannot change a file.
+To let deedup remove duplicates or apply plans, edit the container, set the `/mnt` path's access mode to **Read/Write - Slave**, then sign in and tick **Allow changes** on the Setup screen. Both are needed; until then deedup cannot change a file.
 
-The container runs as `nobody:users` (99:100). Set `DEEDUP_PASSWORD` to require a password (user name `deedup`); otherwise anyone on your LAN can open the UI.
+The container runs as `nobody:users` (99:100) with a read-only root filesystem, no Linux capabilities and `no-new-privileges`. Forgot the admin password? From the Unraid terminal: `docker exec -it deedup deedup reset-password`. For access from outside your home, use a VPN or a reverse proxy with HTTPS and set **Trusted proxies**; see [SECURITY.md](SECURITY.md).
 
-The image is built by GitHub Actions and published to `ghcr.io/steverodrigue/deedup:latest` on every push to `main`. To build it yourself:
+**Upgrading from 0.6.0 or earlier:** if you had set the old **Password** (`DEEDUP_PASSWORD`), it becomes the admin password (user name `admin`) on the first start; then remove the variable. Basic auth is gone.
+
+The image is built by GitHub Actions and published to `ghcr.io/steverodrigue/deedup:latest` and `ghcr.io/steverodrigue/deedup:<version>` on every push to `main`. To build it yourself:
 
 ```sh
 docker build -t deedup .
 docker run -d --name deedup -p 8080:8080 --user 99:100 \
+  --read-only --tmpfs /tmp --cap-drop=ALL --security-opt=no-new-privileges \
   -v /mnt:/mnt:ro,rslave -v /mnt/user/appdata/deedup:/config deedup
 ```
 
@@ -74,7 +81,8 @@ See [`docker-compose.yml`](docker-compose.yml) for a Compose example.
 | `DEEDUP_CONFIG` | `/config` | Where the index database lives |
 | `DEEDUP_MNT` | `/mnt` | Where the host's `/mnt` is mounted |
 | `DEEDUP_PORT` | `8080` | Web UI port |
-| `DEEDUP_PASSWORD` | (none) | Turns on basic auth |
+| `DEEDUP_ADMIN_PASSWORD` | (none) | First run only: creates the admin (user name `admin`). Ignored once an admin exists |
+| `DEEDUP_TRUSTED_PROXIES` | (none) | Comma-separated reverse-proxy addresses or networks whose `X-Forwarded-For`/`-Proto` headers are believed |
 
 Everything else is set in the app on the Setup screen.
 
@@ -90,13 +98,15 @@ DEEDUP_CONFIG=./data DEEDUP_MNT=/path/to/test/mnt python -m deedup
 
 `make ci` runs exactly what GitHub runs on every pull request, and needs only Docker:
 
-1. **Lint and tests** in the Dockerfile's `test` stage, on the same Debian and ExifTool as the image, as a non-root user like on Unraid.
-2. **Image build** (`deedup:ci`).
-3. **Smoke test**: starts the image with an empty read-only `/mnt`, loads every page and checks it runs as uid 99.
+1. **Lint and tests** in the Dockerfile's `test` stage, on the same Debian and ExifTool as the image, as a non-root user like on Unraid. Ruff includes the bandit security rules (`S`) and a list of banned functions (`TID251`) that enforce the [secure coding rules](docs/secure-coding.md).
+2. **pip-audit** of the hash-pinned `requirements.lock` (also `make audit`).
+3. **Image build** (`deedup:ci`).
+4. **Trivy** scan of the image for known High and Critical vulnerabilities with a fix.
+5. **Smoke test**: starts the image locked down (read-only root filesystem, no capabilities) with an empty read-only `/mnt`, loads every page, and checks the security headers, that a signed-out change is refused, that it runs as uid 99 without pip, and that the setup code is in the log.
 
-`make check` is the quick version: ruff and pytest with the Python on your machine, no Docker. GitHub's workflow (`.github/workflows/ci.yml`) calls `make ci` too, then pushes the image on `main`.
+`make check` is the quick version: ruff and pytest with the Python on your machine, no Docker. GitHub's workflow (`.github/workflows/ci.yml`) calls `make ci` too, then pushes the image on `main`; CodeQL runs on every pull request and weekly. After changing dependencies in `pyproject.toml`, run `make lock` and commit `requirements.lock`. Contributors (and AI agents, see [CLAUDE.md](CLAUDE.md)) follow [CONTRIBUTING.md](CONTRIBUTING.md).
 
-Layout: `deedup/discovery.py` (disks, shares, roots), `scanner.py` (directory walk), `hashing.py` (partial and BLAKE3 hashes), `imaging.py` (metadata-blind image hash, thumbnails), `metadata.py` (ExifTool), `archives.py` (reading zip, tar and 7z members, Takeout sidecars), `archive_index.py` (storing members, sidecar pairing, coverage), `similar.py` (perceptual hashes, similar pairs, review decisions), `engine.py` (scan pipeline and grouping), `benchmark.py`, `worker.py` (job queue and schedule), `web/` (FastAPI, Jinja and htmx UI).
+Layout: `deedup/discovery.py` (disks, shares, roots), `scanner.py` (directory walk), `hashing.py` (partial and BLAKE3 hashes), `imaging.py` (metadata-blind image hash, thumbnails), `metadata.py` (ExifTool), `archives.py` (reading zip, tar and 7z members, Takeout sidecars), `archive_index.py` (storing members, sidecar pairing, coverage), `similar.py` (perceptual hashes, similar pairs, review decisions), `engine.py` (scan pipeline and grouping), `benchmark.py`, `worker.py` (job queue and schedule), `changes.py` (removals and moves), `safepath.py` (the only file changes on `/mnt`), `limits.py` (archive limits), `auth.py` (accounts, sessions, throttling), `web/` (FastAPI, Jinja and htmx UI; `web/security.py` is the sign-in, CSRF and headers guard).
 
 ## Licence
 
