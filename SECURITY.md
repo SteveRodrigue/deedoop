@@ -20,7 +20,7 @@
 ## Supported versions
 
 Only the latest release gets security fixes. Images are tagged with their
-version (for example `ghcr.io/steverodrigue/deedup:0.6.5`) and `latest`.
+version (for example `ghcr.io/steverodrigue/deedup:0.7.0`) and `latest`.
 
 ## Reporting a vulnerability
 

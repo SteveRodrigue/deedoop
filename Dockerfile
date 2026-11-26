@@ -11,11 +11,12 @@ RUN pip install --no-cache-dir --no-deps --prefix=/install .
 
 # What the app needs at run time, shared by the test stage and the image.
 FROM python:3.12-slim@sha256:191083cdf6c7bda8c76158983163ead5d5cf7b77cf3033e805bb0f5296f51b4b AS base
-# ExifTool reads photo and video metadata. `upgrade` pulls in Debian security
+# ExifTool reads photo and video metadata; ffmpeg (with ffprobe) reads video and
+# audio for milestone 7. `upgrade` pulls in Debian security
 # fixes newer than the pinned base image (Trivy fails the build without them).
 RUN apt-get update \
  && apt-get upgrade -y --no-install-recommends \
- && apt-get install -y --no-install-recommends libimage-exiftool-perl \
+ && apt-get install -y --no-install-recommends libimage-exiftool-perl ffmpeg \
  && rm -rf /var/lib/apt/lists/*
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \

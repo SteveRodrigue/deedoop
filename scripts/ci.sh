@@ -28,6 +28,9 @@ quick() {
   if ! command -v exiftool >/dev/null; then
     echo "note: exiftool is not installed here, so metadata tests are skipped; the full run has it"
   fi
+  if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then
+    echo "note: ffmpeg is not installed here, so video and audio tests are skipped; the full run has it"
+  fi
   pytest -q
 }
 
@@ -74,7 +77,7 @@ smoke() {
   local probe='import urllib.request as u, urllib.error as e
 base = "http://127.0.0.1:8080"
 for p in ("/healthz", "/login", "/", "/setup", "/duplicates", "/browse", "/review", "/archives", "/reorganize",
-          "/plans", "/changes", "/same-path"):
+          "/plans", "/changes", "/same-path", "/browse?view=music", "/duplicates?method=media"):
     r = u.urlopen(base + p, timeout=4)
     assert r.status == 200, p
     print("  ok", p, "->", r.url.replace(base, ""))
@@ -105,6 +108,9 @@ print("  ok signed-out POST refused")'
     else echo "  ok root filesystem is read-only"; fi
     if docker exec "$name" python -c 'import pip' 2>/dev/null; then echo "  pip is in the image"; ok=0
     else echo "  ok no pip in the image"; fi
+    if docker exec "$name" sh -c 'ffprobe -version && ffmpeg -version && exiftool -ver' >/dev/null 2>&1; then
+      echo "  ok ffprobe, ffmpeg and exiftool in the image"
+    else echo "  ffprobe, ffmpeg or exiftool missing"; ok=0; fi
     if docker logs "$name" 2>&1 | grep -q "setup code"; then echo "  ok setup code in the log"
     else echo "  no setup code in the log"; ok=0; fi
   fi

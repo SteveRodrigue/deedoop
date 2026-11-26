@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from .. import __version__, auth, changes, db, plans, queries, similar
+from .. import __version__, auth, changes, db, plans, queries, scanners, similar
 from ..archive_index import refresh_coverage
 from ..archives import read_member_bytes
 from ..categories import CATEGORIES
@@ -324,7 +324,8 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
             roots = c.execute("SELECT COUNT(*) FROM roots WHERE enabled = 1").fetchone()[0]
             return render(request, "dashboard.html", stats=stats, roots=roots,
                           by_cat=queries.wasted_by_category(c), disks=queries.per_disk(c),
-                          settings=db.get_settings(c), **job_view(c))
+                          settings=(s := db.get_settings(c)), methods_on=scanners.methods(s),
+                          raw_only=scanners.raw_only(s), **job_view(c))
         finally:
             c.close()
 
@@ -350,6 +351,7 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
                           roots=roots, root_counts=queries.root_counts(c), disk_files=disk_files,
                           bench=json.loads(bench["result"]) if bench else None, error=error, saved=saved,
                           mnt=str(cfg.mnt), exiftool=exiftool_available(), gate=changes.gate(c, cfg.mnt),
+                          scanner_rows=scanners.status(settings), raw_only=scanners.raw_only(settings),
                           events=auth.recent_events(c) if request.state.session else [], **job_view(c))
         finally:
             c.close()
@@ -406,6 +408,10 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
         archives_everywhere: str = Form(""),
         similar_matching: str = Form(""),
         similar_threshold: int = Form(similar.DEFAULT_THRESHOLD),
+        scan_photo: str = Form(""),
+        scan_video: str = Form(""),
+        scan_audio: str = Form(""),
+        scan_archive: str = Form(""),
     ):
         if disk_mode not in ("single", "parallel"):
             return RedirectResponse("/setup?error=Unknown+disk+mode", status_code=303)
@@ -416,7 +422,11 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
             return RedirectResponse("/setup?error=Times+must+look+like+01:00", status_code=303)
         c = conn()
         try:
+            before = db.get_settings(c)
+            toggles = {"photo": bool(scan_photo), "video": bool(scan_video), "audio": bool(scan_audio),
+                       "archive": bool(scan_archive)}
             db.set_settings(c, {
+                "scanners": toggles,
                 "exclusions": _lines(exclusions),
                 "takeout_paths": _lines(takeout_paths),
                 "min_size": max(1, min_size),
@@ -432,10 +442,17 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
                 "similar_matching": bool(similar_matching),
                 "similar_threshold": max(0, min(similar_threshold, similar.MAX_DISTANCE)),
             })
+            after = db.get_settings(c)
+            # A scanner or method turned off: drop its groups and marks now, without
+            # waiting for the next scan. One turned on needs a scan to read files.
+            regroup = (scanners.methods(before) != scanners.methods(after)
+                       or scanners.active(before, "archive") != scanners.active(after, "archive"))
+            if regroup and db.active_job(c) is None and c.execute("SELECT 1 FROM groups LIMIT 1").fetchone():
+                db.enqueue_job(c, "regroup")
         finally:
             c.close()
         worker.wake()
-        return RedirectResponse("/setup?saved=settings", status_code=303)
+        return RedirectResponse("/setup?saved=settings#scanners", status_code=303)
 
     @app.post("/setup/changes")
     def setup_changes(request: Request, allow_changes: str = Form(""), allow_direct_delete: str = Form(""),
@@ -491,12 +508,17 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
             pages = max(1, -(-total // flt.per_page))
             qs = _q_params(method=method if method != "exact" else "", category=category, q=q,
                            min_mb=min_mb or "", disk=disk, group=group or "", archives=archives)
+            settings = db.get_settings(c)
+            shown = scanners.methods(settings)
+            if method not in shown:
+                shown.append(method)  # turned off: still reachable from a link, with a note
             counts = {m: c.execute("SELECT COUNT(*), COALESCE(SUM(wasted), 0) FROM groups WHERE method = ? "
-                                   "AND wasted > 0", (m,)).fetchone() for m in queries.METHODS}
+                                   "AND wasted > 0", (m,)).fetchone() for m in shown}
             return render(request, "duplicates.html", groups=groups, members=members, total=total,
                           wasted=wasted, flt=flt, pages=pages, categories=CATEGORIES, disks=disks, qs=qs,
-                          min_mb=min_mb or "", methods=queries.METHODS, counts=counts,
-                          settings=db.get_settings(c), marked=changes.marked_in_groups(c, [g["id"] for g in groups]),
+                          min_mb=min_mb or "", methods={m: queries.METHODS[m] for m in shown}, counts=counts,
+                          method_on=method in scanners.methods(settings), media_fields=queries.MEDIA_FIELDS,
+                          settings=settings, marked=changes.marked_in_groups(c, [g["id"] for g in groups]),
                           marks=changes.marks_summary(c), keeper_rules=changes.KEEPER_RULES, msg=msg,
                           back=str(request.url.path) + ("?" + str(request.url.query) if request.url.query else ""))
         finally:
@@ -505,24 +527,35 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
     @app.get("/browse", response_class=HTMLResponse)
     def browse(request: Request, loc: str = "", dir: str = "", q: str = "", kind: str = "", year: str = "",
                camera: str = "", no_gps: str = "", no_date: str = "", dups: str = "", page: Page = 1,
-               view: str = "list"):
+               view: str = "list", artist: Annotated[str, Query(max_length=300)] = "",
+               album: Annotated[str, Query(max_length=300)] = "", codec: Annotated[str, Query(max_length=40)] = "",
+               length: Annotated[str, Query(max_length=10)] = ""):
+        view = view if view in ("list", "grid", "music") else "list"
         c = conn()
         try:
             locs = queries.locations(c)
             if not loc and locs:
                 loc = locs[0]["key"]
+            music_view = view == "music"
             flt = queries.BrowseFilter(loc=loc, dir=dir.strip("/"), q=q, kind=kind, year=year, camera=camera,
-                                       no_gps=bool(no_gps), no_date=bool(no_date), dups=bool(dups), page=page)
-            res = queries.browse(c, flt)
+                                       no_gps=bool(no_gps), no_date=bool(no_date), dups=bool(dups), page=page,
+                                       artist="" if music_view else artist, album=album, codec=codec,
+                                       length=length)
+            res = queries.browse(c, flt) if not music_view else {"subdirs": [], "files": [], "total": 0,
+                                                                  "base": queries.loc_roots(c, loc)[1]}
+            music = queries.music(c, queries.BrowseFilter(loc=loc, dir=flt.dir, artist=artist)) if music_view else None
             crumbs, acc = [], []
             for part in flt.dir.split("/") if flt.dir else []:
                 acc.append(part)
                 crumbs.append((part, "/".join(acc)))
             filters = _q_params(q=q, kind=kind, year=year, camera=camera, no_gps=no_gps, no_date=no_date,
-                                dups=dups, view=view if view != "list" else "")
+                                dups=dups, artist=flt.artist, album=album, codec=codec, length=length,
+                                view=view if view != "list" else "")
+            s = db.get_settings(c)
             return render(request, "browse.html", locs=locs, flt=flt, res=res, crumbs=crumbs,
                           facets=queries.facets(c), categories=CATEGORIES, view=view, filters=filters,
-                          pages=max(1, -(-res["total"] // flt.per_page)), loc=loc)
+                          pages=max(1, -(-res["total"] // flt.per_page)), loc=loc, music=music, artist=artist,
+                          media_on=bool(scanners.media_kinds(s)), audio_on=scanners.active(s, "audio"))
         finally:
             c.close()
 
@@ -569,6 +602,30 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
                 return Response(PLACEHOLDER_SVG, media_type="image/svg+xml",
                                 headers={"Cache-Control": "max-age=300"})
         return FileResponse(dest, media_type="image/jpeg", headers={"Cache-Control": "max-age=86400"})
+
+    @app.get("/media/{file_id}")
+    def media_file(file_id: int):
+        """Play a song or video in the file page. Read-only, loose files only,
+        audio and video types only, served with range requests (SC1: a GET
+        that reads, never writes)."""
+        c = conn()
+        try:
+            r = c.execute("SELECT f.dir, f.name, f.ext, f.size, f.mtime_ns, f.container_id, f.state, r.path "
+                          "FROM files f JOIN roots r ON r.id = f.root_id WHERE f.id = ? AND r.enabled = 1",
+                          (file_id,)).fetchone()
+        finally:
+            c.close()
+        if r is None or r["container_id"] or r["state"] != "present" or r["ext"] not in PLAYABLE:
+            return Response(status_code=404)
+        path = Path(r["path"]) / r["dir"] / r["name"]
+        try:
+            st = path.lstat()  # a symlink swapped in after the scan is not followed
+        except OSError:
+            return Response(status_code=404)
+        if not path.is_file() or path.is_symlink() or (st.st_size, st.st_mtime_ns) != (r["size"], r["mtime_ns"]):
+            return Response(status_code=404)
+        return FileResponse(path, media_type=PLAYABLE[r["ext"]], headers={"Cache-Control": "private, max-age=3600"},
+                            content_disposition_type="inline")
 
     @app.get("/review", response_class=HTMLResponse)
     def review(request: Request, view: str = "queue", done: str = ""):
@@ -1019,6 +1076,13 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
 
     return app
 
+
+# What the browser's <audio> and <video> elements are given (milestone 7).
+PLAYABLE = {
+    "mp3": "audio/mpeg", "m4a": "audio/mp4", "aac": "audio/aac", "flac": "audio/flac", "wav": "audio/wav",
+    "ogg": "audio/ogg", "opus": "audio/ogg", "oga": "audio/ogg", "webm": "video/webm", "mp4": "video/mp4",
+    "m4v": "video/mp4", "mov": "video/quicktime", "mkv": "video/x-matroska",
+}
 
 PLAN_LIMIT = 50_000  # files in one preview; narrow the folder or filters for more
 

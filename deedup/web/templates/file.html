@@ -7,6 +7,10 @@
   <div class="cols">
     <div>
       {% if f.thumb %}<img class="thumb l" src="/thumb/{{ f.id }}?s=640" alt="Preview of {{ f.name }}">
+      {% elif f.playable and f.av and not f.av.error %}
+        {% if f.av.kind == "video" %}<video class="player" controls preload="metadata" src="/media/{{ f.id }}"></video>
+        {% else %}<audio class="player" controls preload="none" src="/media/{{ f.id }}"></audio>{% endif %}
+        <p class="muted small">Plays in your browser if it supports this format.</p>
       {% else %}<p class="muted">No preview for this file type.</p>{% endif %}
     </div>
     <dl class="kv">
@@ -19,7 +23,7 @@
       {% if f.taken_at %}<dt>Taken</dt><dd>{{ f.taken_at }}</dd>{% endif %}
       {% if f.camera %}<dt>Camera</dt><dd>{{ f.camera }}</dd>{% endif %}
       {% if f.dims %}<dt>Resolution</dt><dd>{{ f.dims }}</dd>{% endif %}
-      {% if f.duration %}<dt>Duration</dt><dd>{{ "%.1f" | format(f.duration) }} s</dd>{% endif %}
+      {% if f.length %}<dt>Length</dt><dd>{{ f.length }}</dd>{% endif %}
       {% if f.gps %}<dt>GPS</dt><dd>{{ "%.6f" | format(f.gps_lat) }}, {{ "%.6f" | format(f.gps_lon) }}
         <a class="small" href="https://www.openstreetmap.org/?mlat={{ f.gps_lat }}&mlon={{ f.gps_lon }}#map=15/{{ f.gps_lat }}/{{ f.gps_lon }}" rel="noreferrer noopener" target="_blank">map</a></dd>{% endif %}
       {% if f.orientation and f.orientation != 1 %}<dt>Orientation</dt><dd>EXIF {{ f.orientation }}</dd>{% endif %}
@@ -33,6 +37,35 @@
     </dl>
   </div>
 </section>
+
+{% if f.av %}{% set v = f.av %}
+<section class="card">
+  <h2>{{ "Video" if v.kind == "video" else "Audio" }}</h2>
+  {% if v.error %}<p class="flash err">Could not be read: {{ v.error }}. Exact-copy matching still works for this file.</p>
+  {% else %}
+  <div class="cols">
+    <dl class="kv">
+      {% if v.container_label %}<dt>Container</dt><dd>{{ v.container_label }}</dd>{% endif %}
+      {% if v.vcodec %}<dt>Video</dt><dd>{{ v.vcodec }}{% if v.width %}, {{ v.width }}×{{ v.height }}{% endif %}{% if v.fps %}, {{ v.fps }} fps{% endif %}</dd>{% endif %}
+      {% if v.acodec %}<dt>Audio</dt><dd>{{ v.acodec }}{% if v.channels %}, {{ {1: "mono", 2: "stereo"}.get(v.channels, v.channels ~ " channels") }}{% endif %}{% if v.sample_rate %}, {{ "%.1f" | format(v.sample_rate / 1000) }} kHz{% endif %}</dd>{% endif %}
+      {% if v.bitrate %}<dt>Bitrate</dt><dd>{{ (v.bitrate / 1000) | round | int }} kbps</dd>{% endif %}
+      {% if v.has_cover %}<dt>Cover art</dt><dd>yes</dd>{% endif %}
+    </dl>
+    {% if v.title or v.artist or v.album %}
+    <dl class="kv">
+      {% if v.title %}<dt>Title</dt><dd>{{ v.title }}</dd>{% endif %}
+      {% if v.artist %}<dt>Artist</dt><dd><a href="/browse?view=music&artist={{ (v.album_artist or v.artist) | urlencode }}">{{ v.artist }}</a></dd>{% endif %}
+      {% if v.album_artist and v.album_artist != v.artist %}<dt>Album artist</dt><dd>{{ v.album_artist }}</dd>{% endif %}
+      {% if v.album %}<dt>Album</dt><dd>{{ v.album }}</dd>{% endif %}
+      {% if v.track %}<dt>Track</dt><dd>{{ v.track }}{% if v.disc %} (disc {{ v.disc }}){% endif %}</dd>{% endif %}
+      {% if v.year %}<dt>Year</dt><dd>{{ v.year }}</dd>{% endif %}
+      {% if v.genre %}<dt>Genre</dt><dd>{{ v.genre }}</dd>{% endif %}
+    </dl>
+    {% endif %}
+  </div>
+  {% endif %}
+</section>
+{% endif %}
 
 {% if f.archive %}{% set a = f.archive %}
 <section class="card">
@@ -52,7 +85,7 @@
   {% if f.groups %}
   <ul>
     {% for g in f.groups %}
-    <li><a href="/duplicates?method={{ g.method }}&group={{ g.id }}">{{ {"exact": "Exact copy", "image": "Same photo, different metadata", "similar": "Similar photo"}[g.method] }}</a>:
+    <li><a href="/duplicates?method={{ g.method }}&group={{ g.id }}">{{ {"exact": "Exact copy", "image": "Same photo, different metadata", "media": "Same recording, other tags", "similar": "Similar photo"}.get(g.method, g.method) }}</a>:
       {{ g.copies }} copies, {{ g.wasted | bytes }} reclaimable</li>
     {% endfor %}
   </ul>
@@ -82,7 +115,8 @@
   <dl class="kv">
     {% set names = {"partial": "Quick hash (xxh3-128, first and last 64 KB)", "blake3": "Content (BLAKE3)",
                     "img_exact": "Image data (BLAKE3, metadata ignored)", "img_none": "Image data",
-                    "phash": "Perceptual hash (pHash)", "dhash": "Perceptual hash (dHash)", "sim_none": "Perceptual hash"} %}
+                    "phash": "Perceptual hash (pHash)", "dhash": "Perceptual hash (dHash)", "sim_none": "Perceptual hash",
+                    "stream": "Audio and video streams (tags and container ignored)", "stream_none": "Audio and video streams"} %}
     {% for k, v in f.hashes.items() %}<dt>{{ names.get(k, k) }}</dt><dd class="mono">{{ v }}</dd>{% endfor %}
   </dl>
   {% else %}<p class="muted">Not hashed: no other file has the same size.</p>{% endif %}
