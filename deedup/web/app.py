@@ -669,7 +669,9 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
                 media_similar.rebuild_groups(c)
         finally:
             c.close()
-        return RedirectResponse(f"/review?kind=media&done={_q(decision) if ok else ''}", status_code=303)
+        # SC7: the redirect carries only a name from our own list, never the posted text.
+        done = next((d for d in media_similar.DECISIONS if d == decision), "") if ok else ""
+        return RedirectResponse(f"/review?kind=media&done={done}", status_code=303)
 
     @app.post("/review/media/undo")
     def review_media_undo(a: int = Form(...), b: int = Form(...)):

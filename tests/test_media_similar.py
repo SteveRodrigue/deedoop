@@ -237,7 +237,10 @@ def test_review_pages_and_poster(unraid, conn, library):
             assert client.get(f"/poster/{fid(conn, 'Low Tide.flac')}").status_code == 404
         a, b = sorted((v, fid(conn, "VID-WA0001.mp4")))
         r = client.post("/review/media/decide", data={"a": a, "b": b, "decision": "both"}, follow_redirects=False)
-        assert r.status_code == 303
+        assert r.status_code == 303 and r.headers["location"] == "/review?kind=media&done=both"
+        bad = client.post("/review/media/decide", data={"a": a, "b": b, "decision": "x\r\nLocation: //evil"},
+                          follow_redirects=False)
+        assert bad.headers["location"] == "/review?kind=media&done="  # SC7: never echoes the posted text
         assert "Same, keep both" in client.get("/review?kind=media&view=decided").text
         assert client.post("/review/media/undo", data={"a": a, "b": b}, follow_redirects=False).status_code == 303
         assert client.get("/duplicates?method=media_similar").status_code == 200
