@@ -5,9 +5,9 @@
 ## Security checklist (docs/secure-coding.md)
 
 - [ ] SC1: new state-changing routes are POST; every new POST form includes `_csrf.html`; no GET writes
-- [ ] SC2: file changes on /mnt only through `deedup.safepath`
+- [ ] SC2: file changes on /mnt only through `deedoop.safepath`
 - [ ] SC3: no new subprocess or shell; ExifTool arguments checked
-- [ ] SC4: archives read within `deedup.limits`, never extracted
+- [ ] SC4: archives read within `deedoop.limits`, never extracted
 - [ ] SC5: SQL values passed as `?` parameters
 - [ ] SC6: no `|safe`, `Markup`, inline scripts or `on…=` handlers
 - [ ] SC7: new inputs typed and bounded; redirects through `safe_next`

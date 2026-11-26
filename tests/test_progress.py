@@ -6,9 +6,9 @@ import time
 
 import pytest
 
-from deedup import db, scanners, tls
-from deedup.config import AppConfig
-from deedup.control import Status, fmt_seconds, progress_view
+from deedoop import db, scanners, tls
+from deedoop.config import AppConfig
+from deedoop.control import Status, fmt_seconds, progress_view
 from tests.conftest import scan, write
 from tests.test_web import make_client, wait_idle
 
@@ -215,11 +215,11 @@ def test_expired_certificate_is_flagged(tmp_path, monkeypatch):
 def test_setup_shows_https_state(unraid):
     with make_client(unraid) as client:
         r = client.get("/setup")
-        assert 'id="https"' in r.text and "DEEDUP_HTTPS" in r.text
+        assert 'id="https"' in r.text and "DEEDOOP_HTTPS" in r.text
 
 
 def test_setup_shows_the_certificate_fingerprint(unraid, tmp_path):
-    from deedup.web.app import create_app
+    from deedoop.web.app import create_app
     from tests.conftest import ensure_admin
     from tests.test_web import SignedInClient
 

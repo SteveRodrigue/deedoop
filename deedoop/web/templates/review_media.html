@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block title %}Review songs and videos · deedoop{% endblock %}
+{% macro side(p, which, pr) %}
+<div class="side {{ 'keeper' if pr.keeper == which }}">
+  {% if p.play and p.kind == "video" %}
+    <video class="player" controls preload="none" poster="/poster/{{ p.id }}" src="/media/{{ p.id }}"></video>
+  {% elif p.kind == "video" %}
+    <img class="thumb l poster" src="/poster/{{ p.id }}" alt="A frame from {{ p.name }}">
+  {% elif p.play %}
+    <audio class="player" controls preload="none" src="/media/{{ p.id }}"></audio>
+  {% endif %}
+  {% if not p.play %}<p class="muted small">Your browser can't play .{{ p.ext }} files here.</p>{% endif %}
+  <div class="row between" style="margin-top:8px">
+    <strong style="overflow-wrap:anywhere"><a href="/file/{{ p.id }}">{{ p.name }}</a></strong>
+    {% if pr.keeper == which %}<span class="pill ok" title="Lossless first, then the highest resolution or bitrate, then the longest, then the most tags">suggested keeper</span>{% endif %}
+  </div>
+  <dl class="kv">
+    <dt>Folder</dt><dd class="{{ 'differs' if 'folder' in pr.differs }}">{{ p.folder }}</dd>
+    <dt>Disk</dt><dd>{{ p.disk }}</dd>
+    <dt>Size</dt><dd><span class="{{ 'differs' if 'size' in pr.differs }}">{{ p.size | bytes }}</span></dd>
+    <dt>Length</dt><dd><span class="{{ 'differs' if 'length' in pr.differs }}">{{ p.length or "unknown" }}</span></dd>
+    <dt>Format</dt><dd><span class="{{ 'differs' if 'container' in pr.differs }}">{{ p.container or "unknown" }}</span></dd>
+    <dt>Codec</dt><dd><span class="{{ 'differs' if 'codecs' in pr.differs }}">{{ p.codecs or "unknown" }}</span></dd>
+    <dt>Bitrate</dt><dd><span class="{{ 'differs' if 'kbps' in pr.differs }}">{{ p.kbps or "unknown" }}</span></dd>
+    {% if p.kind == "video" %}
+    <dt>Resolution</dt><dd><span class="{{ 'differs' if 'dims' in pr.differs }}">{{ p.dims or "unknown" }}</span>{% if p.fps %} <span class="{{ 'differs' if 'fps' in pr.differs }}">{{ p.fps }}</span>{% endif %}</dd>
+    {% endif %}
+    <dt>Audio</dt><dd><span class="{{ 'differs' if 'audio' in pr.differs }}">{{ p.audio or "none" }}</span></dd>
+    {% if p.title or p.artist %}
+    <dt>Title</dt><dd><span class="{{ 'differs' if 'title' in pr.differs }}">{{ p.title or "none" }}</span></dd>
+    <dt>Artist</dt><dd><span class="{{ 'differs' if 'artist' in pr.differs }}">{{ p.artist or "none" }}</span></dd>
+    {% endif %}
+  </dl>
+</div>
+{% endmacro %}
+{% block content %}
+<nav class="tabs kinds">
+  <a href="/review">Photos <span class="count">{{ "{:,}".format(photo_counts.open) }}</span></a>
+  <a href="/review?kind=media" class="on">Songs and videos <span class="count">{{ "{:,}".format(counts.open) }}</span></a>
+</nav>
+<nav class="tabs">
+  <a href="/review?kind=media" class="{{ 'on' if view == 'queue' }}">To review <span class="count">{{ "{:,}".format(counts.open) }}</span></a>
+  <a href="/review?kind=media&view=decided" class="{{ 'on' if view == 'decided' }}">Reviewed <span class="count">{{ "{:,}".format(counts.decided) }}</span></a>
+</nav>
+
+<section class="card">
+  <p style="margin:0">Songs and videos that sound or look the same but were encoded again: a FLAC and its MP3, a phone video and
+    the copy a messaging app or Google Photos made, a resized export. Listen to or watch both, then decide. Your decisions are only
+    recorded; removing the copies you did not keep is confirmed on the <a href="/changes">Changes</a> screen.</p>
+  {% if not media_on %}<p class="flash err">Re-encoded songs and videos are turned off on the <a href="/setup#scanners">Setup</a> screen.</p>{% endif %}
+</section>
+
+{% if view == "queue" %}
+  {% if pairs %}{% set pr = pairs[0] %}
+  <section class="card" data-review>
+    <div class="row between">
+      <h2 style="margin:0">{{ "Very close" if pr.strength == "close" else "Likely the same " ~ ("song" if pr.kind == "audio" else "video") if pr.strength == "likely" else "Possibly the same " ~ ("song" if pr.kind == "audio" else "video") }}</h2>
+      <span class="muted small" title="{{ 'Share of the audio fingerprint that agrees' if pr.kind == 'audio' else 'Share of the 12 sampled frames that look the same' }}">
+        {{ pr.score }}% {{ "of the sound" if pr.kind == "audio" else "of the frames" }} match{% for h in pr.hints %} · {{ h }}{% endfor %}</span>
+    </div>
+    <div class="pair" style="margin-top:10px">
+      {{ side(pr.a, "a", pr) }}
+      {{ side(pr.b, "b", pr) }}
+    </div>
+    <form method="post" action="/review/media/decide" class="decide">{% include "_csrf.html" %}
+      <input type="hidden" name="a" value="{{ pr.a.id }}"><input type="hidden" name="b" value="{{ pr.b.id }}">
+      <button name="decision" value="keep_a" data-key="k">Keep left<kbd>K</kbd></button>
+      <button name="decision" value="keep_b" data-key="j">Keep right<kbd>J</kbd></button>
+      <button name="decision" value="both" data-key="b" class="secondary">Same, keep both<kbd>B</kbd></button>
+      <button name="decision" value="not_dup" data-key="n" class="danger">Not the same<kbd>N</kbd></button>
+      <button name="decision" value="later" data-key="s" class="secondary">Decide later<kbd>S</kbd></button>
+    </form>
+    <p class="muted small" style="margin-bottom:0">“Keep” records your choice; the other copy can then be removed from the
+      <a href="/changes">Changes</a> screen, after you confirm there. “Not the same” hides this pair for good.</p>
+  </section>
+  {% else %}
+  <section class="card"><p class="muted">{% if counts.pairs %}All {{ "{:,}".format(counts.pairs) }} pairs are reviewed.{% else %}No re-encoded songs or videos found{% if media_on %} yet. They appear after a scan{% endif %}.{% endif %}</p></section>
+  {% endif %}
+{% else %}
+  <section class="card">
+  {% if pairs %}
+    <table class="members">
+      <thead><tr><th>Left</th><th>Right</th><th>Decision</th><th class="col-mtime">When</th><th></th></tr></thead>
+      {% for pr in pairs %}
+      <tr>
+        <td><div class="small path" title="{{ pr.a.user_path }}"><a href="/file/{{ pr.a.id }}">{{ pr.a.name }}</a></div>
+          <div class="muted small">{{ pr.a.codecs or "" }}{% if pr.a.kbps %} · {{ pr.a.kbps }}{% endif %}</div></td>
+        <td><div class="small path" title="{{ pr.b.user_path }}"><a href="/file/{{ pr.b.id }}">{{ pr.b.name }}</a></div>
+          <div class="muted small">{{ pr.b.codecs or "" }}{% if pr.b.kbps %} · {{ pr.b.kbps }}{% endif %}</div></td>
+        <td>{% if pr.kept %}Same, keep {{ pr.kept }}{% else %}{{ decisions[pr.decision] }}{% endif %}<div class="muted small">{{ pr.score }}% match</div></td>
+        <td class="muted small col-mtime">{{ pr.decided_at | time }}</td>
+        <td><form method="post" action="/review/media/undo">{% include "_csrf.html" %}<input type="hidden" name="a" value="{{ pr.a.id }}"><input type="hidden" name="b" value="{{ pr.b.id }}">
+          <button class="secondary small">Undo</button></form></td>
+      </tr>
+      {% endfor %}
+    </table>
+  {% else %}<p class="muted">Nothing reviewed yet.</p>{% endif %}
+  </section>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Archives · deedoop{% endblock %}
+{% macro covbar(e) %}{% set n = e.members or 1 %}<div class="cov" title="{{ e.exact }} already on disk, {{ e.image }} same photo on disk, {{ e.similar }} similar photo on disk, {{ e.archive }} only in another archive, {{ e.new }} not on disk yet">
+  <span class="c-exact" style="width:{{ 100 * e.exact / n }}%"></span><span class="c-image" style="width:{{ 100 * e.image / n }}%"></span><span class="c-similar" style="width:{{ 100 * e.similar / n }}%"></span><span class="c-archive" style="width:{{ 100 * e.archive / n }}%"></span><span class="c-new" style="width:{{ 100 * e.new / n }}%"></span></div>{% endmacro %}
+{% block content %}
+<section class="card">
+  <h2>Archives and Google Takeout</h2>
+  <p>deedoop reads zip, tar and 7z files in place, without extracting them, and checks whether each file inside is already on
+    your disks. Parts of a multi-part Takeout are shown together, and their JSON sidecars supply dates for the photos.</p>
+  <div class="legend small">
+    <span><i class="c-exact"></i>Already on disk</span>
+    <span><i class="c-image"></i>Same photo on disk (metadata differs)</span>
+    <span><i class="c-similar"></i>Similar photo on disk (recompressed or resized)</span>
+    <span><i class="c-archive"></i>Only in another archive</span>
+    <span><i class="c-new"></i>Not on disk yet</span>
+  </div>
+  {% if not settings.takeout_paths and not settings.archives_everywhere %}
+  <p class="flash err">No archive folders are set. Add your Takeout folders on the <a href="/setup">Setup</a> screen, or turn on
+    “Open archives in every scanned folder”, then run a scan.</p>
+  {% endif %}
+</section>
+
+{% if archives %}
+<section class="card">
+  <table>
+    <thead><tr><th>Archive</th><th class="hide-phone">Folder</th><th class="num">Files</th><th>Coverage</th><th class="num hide-phone">On disk</th><th class="num">Not on disk</th></tr></thead>
+    {% for e in archives %}
+    <tr>
+      <td><a href="/archives/{{ e.id }}">{{ e.label }}</a>
+        {% if e.takeout %}<span class="pill">Takeout{% if e.parts > 1 %}, {{ e.parts }} parts{% endif %}</span>{% else %}<span class="pill">{{ e.kind }}</span>{% endif %}
+        {% if e.errors %}<span class="pill warn" title="Some parts could not be read">{{ e.errors }} unreadable</span>{% endif %}
+        <div class="muted small">{{ e.size | bytes }} · {{ e.disks | join(", ") }}</div></td>
+      <td class="path small muted hide-phone" title="{{ e.folder }}">{{ e.folder }}</td>
+      <td class="num">{{ "{:,}".format(e.members) }}</td>
+      <td>{{ covbar(e) }}</td>
+      <td class="num hide-phone">{{ "%.0f" | format(100 * e.covered) }}%</td>
+      <td class="num">{{ "{:,}".format(e.new) }}<div class="muted small">{{ e.new_bytes | bytes }}</div></td>
+    </tr>
+    {% endfor %}
+  </table>
+</section>
+{% else %}
+<section class="card"><p class="muted">No archives indexed yet.</p></section>
+{% endif %}
+{% endblock %}

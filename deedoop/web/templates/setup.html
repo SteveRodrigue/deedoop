@@ -1,0 +1,293 @@
+{% extends "base.html" %}
+{% block title %}Setup · deedoop{% if signed_in %}
+<section class="card" id="security-log">
+  <h2>Security log</h2>
+  <p class="muted">Sign-ins, failed attempts, lockouts and every change request, newest first.</p>
+  {% if events %}
+  <table class="log">
+    <thead><tr><th>When</th><th>Event</th><th>User</th><th>Address</th><th>Detail</th></tr></thead>
+    {% for e in events %}<tr><td>{{ e.at | time }}</td><td>{{ e.event }}</td><td>{{ e.username }}</td><td class="mono small">{{ e.ip }}</td><td class="detail small">{{ e.detail }}</td></tr>{% endfor %}
+  </table>
+  {% else %}<p class="muted">Nothing yet.</p>{% endif %}
+</section>
+{% endif %}
+{% endblock %}
+{% block content %}
+{% if error %}<div class="flash err">{{ error }}</div>{% endif %}
+{% if saved %}<div class="flash ok">Saved.</div>{% endif %}
+
+<section class="card">
+  <h2>Shares to scan</h2>
+  <p class="muted">deedoop reads each share straight from the disks that hold it (never through <code>/mnt/user</code>),
+  so every file knows its disk and disks can be read one at a time. Shares such as <code>appdata</code>,
+  <code>system</code> and <code>domains</code> are usually best left unticked.</p>
+  {% if shares %}
+  <form method="post" action="/setup/shares">{% include "_csrf.html" %}
+    <table>
+      <thead><tr><th></th><th>Share</th><th>On disks</th><th class="num">Files indexed</th></tr></thead>
+      {% for s in shares %}
+      <tr>
+        <td><input type="checkbox" name="share" value="{{ s.name }}" id="share-{{ loop.index }}" {{ "checked" if s.name in settings.shares }}></td>
+        <td><label for="share-{{ loop.index }}">{{ s.name }}</label> <span class="muted small">{{ s.user_path }}</span></td>
+        <td class="small">{{ s.disks | join(", ") or "—" }}</td>
+        <td class="num">
+          {% set ns = namespace(n=0) %}
+          {% for r in roots if r.share == s.name and r.enabled %}{% set ns.n = ns.n + root_counts.get(r.id, 0) %}{% endfor %}
+          {{ "{:,}".format(ns.n) if ns.n else "" }}
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+    <button>Save share selection</button>
+  </form>
+  {% else %}
+  <p>No shares found under <code>{{ mnt }}</code>. Check that the container maps the host's <code>/mnt</code> to <code>{{ mnt }}</code>.</p>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>Other folders</h2>
+  <p class="muted">Add a folder that is not an Unraid share, for example on an unassigned device. It must be inside <code>{{ mnt }}</code>.</p>
+  <form method="post" action="/setup/custom" class="row">{% include "_csrf.html" %}
+    <input type="text" name="path" placeholder="/mnt/disks/usb-backup/Old laptop" size="50" required>
+    <button>Add folder</button>
+  </form>
+  {% set custom = roots | selectattr("source", "equalto", "custom") | list %}
+  {% if custom %}
+  <table>
+    <thead><tr><th>Folder</th><th>Disk</th><th class="num">Files indexed</th><th></th></tr></thead>
+    {% for r in custom %}
+    <tr><td>{{ r.path }}</td><td>{{ r.disk }}</td><td class="num">{{ "{:,}".format(root_counts.get(r.id, 0)) }}</td>
+      <td><form method="post" action="/setup/root/{{ r.id }}/remove">{% include "_csrf.html" %}<button class="secondary small">Remove</button></form></td></tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>Disks and pools</h2>
+  <table>
+    <thead><tr><th>Name</th><th>Type</th><th>Path</th><th class="num">Used</th><th class="num">Size</th><th class="num">Files indexed</th></tr></thead>
+    {% for d in disks %}
+    <tr><td>{{ d.name }}</td><td class="muted">{{ d.kind }}</td><td class="small">{{ d.path }}</td>
+      <td class="num">{{ d.used | bytes }}</td><td class="num">{{ d.total | bytes }}</td>
+      <td class="num">{{ "{:,}".format(disk_files.get(d.name, 0)) if disk_files.get(d.name) else "" }}</td></tr>
+    {% endfor %}
+  </table>
+</section>
+
+<form method="post" action="/setup/settings">{% include "_csrf.html" %}
+<section class="card">
+  <h2>Scan settings</h2>
+  <div class="grid2">
+    <label>Exclusions <span class="muted small">one pattern per line, matched against names and share-relative paths (* and ? work)</span>
+      <textarea name="exclusions" rows="6">{{ settings.exclusions | join("\n") }}</textarea></label>
+    <label>Takeout and archive folders <span class="muted small">one path per line, such as /mnt/user/Backups/Takeout;
+      zip, tar and 7z files there are opened and their contents compared with your disks, while the archive scanner is on</span>
+      <textarea name="takeout_paths" rows="6">{{ settings.takeout_paths | join("\n") }}</textarea></label>
+  </div>
+  <label class="radio"><input type="checkbox" name="archives_everywhere" value="1" {{ "checked" if settings.archives_everywhere }}>
+    Open archives in every scanned folder <span class="muted small">(slower: each archive is read once in full; archives are never extracted to disk)</span></label>
+  <label>Ignore files smaller than <input type="number" name="min_size" min="1" value="{{ settings.min_size }}"> bytes</label>
+</section>
+
+<section class="card" id="scanners">
+  <h2>Scanners</h2>
+  <p class="muted">Exact copies are always found, for every file type, by comparing file contents. Each scanner below adds
+    its own understanding of one kind of file. Turn off the ones you don't need: their scan steps are skipped, and their
+    duplicate groups and marks are dropped right away. With every scanner off, deedoop compares raw file contents only.</p>
+  {% if raw_only %}<p class="flash ok">Every scanner is off: deedoop finds byte-identical files only.</p>{% endif %}
+  <div class="scanners">
+    <div class="scanner on">
+      <label class="radio"><input type="checkbox" checked disabled> <strong>Exact copies</strong> <span class="pill ok">always on</span></label>
+      <p class="muted small">Same bytes, any file type, any name. Quick hash first, BLAKE3 only for likely copies.</p>
+    </div>
+    {% for sc in scanner_rows %}
+    <div class="scanner {{ 'on' if sc.enabled and sc.available }}" id="scanner-{{ sc.key }}">
+      <label class="radio"><input type="checkbox" name="scan_{{ sc.key }}" value="1" {{ "checked" if sc.enabled }}>
+        <strong>{{ sc.label }}</strong>
+        {% if sc.enabled and not sc.available %}<span class="pill warn">needs {{ sc.missing | join(", ") }}</span>
+        {% elif sc.enabled %}<span class="pill ok">on</span>{% else %}<span class="pill">off</span>{% endif %}</label>
+      <p class="small">{{ sc.finds }}</p>
+      <p class="muted small">{{ sc.cost }}</p>
+      {% if sc.enabled and not sc.available %}<p class="flash err small">{{ sc.missing | join(" and ") }} {{ "is" if sc.missing | length == 1 else "are" }} not installed in this container, so this scanner is skipped.</p>{% endif %}
+      {% if sc.key == "photo" %}
+      <div class="sub">
+        <label class="radio"><input type="checkbox" name="image_matching" value="1" {{ "checked" if settings.image_matching }}>
+          Same photo, different metadata <span class="muted small">(reads every JPEG, PNG, HEIC, WebP, TIFF once in full)</span></label>
+        <label class="radio"><input type="checkbox" name="similar_matching" value="1" {{ "checked" if settings.similar_matching }}>
+          Similar photos <span class="muted small">(recompressed or resized copies such as Google “Storage saver”; you review every match)</span></label>
+        <label class="radio">Match closeness <input type="number" name="similar_threshold" min="0" max="10" value="{{ settings.similar_threshold }}" style="width:5em">
+          <span class="muted small">0 to 10, default 8; lower is stricter</span></label>
+      </div>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  <label class="radio" style="margin-top:12px"><input type="checkbox" name="similar_media" value="1" {{ "checked" if settings.similar_media }}>
+    Re-encoded songs and videos <span class="muted small">(with the Videos or Music scanner on: a fingerprint of the first two minutes
+    of each song, 12 frames of each video; you review every match)</span></label>
+  {% if settings.similar_media and not chromaprint %}<p class="flash err small">This ffmpeg has no Chromaprint support, so songs are not fingerprinted; videos still are.</p>{% endif %}
+  <label class="radio"><input type="checkbox" name="metadata" value="1" {{ "checked" if settings.metadata }}>
+    Read dates, cameras and GPS with ExifTool <span class="muted small">(photos and videos, while their scanner is on; headers only)</span></label>
+  {% if not exiftool %}<p class="flash err">ExifTool is not installed in this container, so metadata is skipped.</p>{% endif %}
+  <p class="muted small">Turning a scanner on takes effect at the next scan, which reads only the files it needs.</p>
+  <button>Save settings</button>
+</section>
+
+<section class="card" id="disk-mode">
+  <h2>Disk mode</h2>
+  <label class="radio"><input type="radio" name="disk_mode" value="single" {{ "checked" if settings.disk_mode == "single" }}>
+    One disk at a time <span class="muted small">(default: only one array disk spins and works at once)</span></label>
+  <label class="radio"><input type="radio" name="disk_mode" value="parallel" {{ "checked" if settings.disk_mode == "parallel" }}>
+    Parallel: read up to <input type="number" name="parallel_disks" min="2" max="32" value="{{ settings.parallel_disks }}"> disks at once</label>
+  <label>Hash threads per large file <input type="number" name="hash_threads" min="1" max="64" value="{{ settings.hash_threads }}">
+    <span class="muted small">1 suits spinning disks; more helps only on fast SSDs</span></label>
+</section>
+
+<section class="card">
+  <h2>Schedule</h2>
+  <label class="radio"><input type="checkbox" name="schedule_enabled" value="1" {{ "checked" if settings.schedule_enabled }}>
+    Scan every day from <input type="time" name="schedule_start" value="{{ settings.schedule_start }}">
+    to <input type="time" name="schedule_end" value="{{ settings.schedule_end }}"></label>
+  <p class="muted small">A scheduled scan stops at the end time and picks up where it left off the next night. Scans you start yourself are not stopped.</p>
+  <button>Save settings</button>
+</section>
+</form>
+
+<section class="card" id="access">
+  <h2>Sign-in and access</h2>
+  <p class="muted">Signed out, deedoop is always read-only: every change needs the admin to be signed in.</p>
+  {% if signed_in %}
+  <form method="post" action="/setup/access">{% include "_csrf.html" %}
+    <label class="radio"><input type="checkbox" name="public_view" value="1" {{ "checked" if settings.public_view }}>
+      <strong>Signed-out visitors can browse (read-only)</strong>: every page, file names, photos and reports.
+      When off, signed-out visitors only see the scan status and the sign-in form.</label>
+    <label>Host names deedoop answers to <span class="muted small">(one per line; empty allows any. Guards against DNS rebinding.
+      Include every name and address you open deedoop with, for example <span class="mono">tower.local</span> and <span class="mono">192.168.1.10</span>.)</span>
+      <textarea name="allowed_hosts" rows="2" class="mono">{{ settings.allowed_hosts | join("\n") }}</textarea></label>
+    <button>Save</button>
+  </form>
+  {% else %}
+  <p>Signed-out visitors can browse: <strong>{{ "on" if settings.public_view else "off" }}</strong>. <a href="/login?next=/setup">Sign in</a> to change it.</p>
+  {% endif %}
+</section>
+
+<section class="card" id="https">
+  <h2>HTTPS</h2>
+  {% if tls.enabled %}
+  <p><span class="pill ok">on</span>
+    {% if tls.source == "yours" %}with <strong>your certificate</strong>.
+    {% else %}with a <strong>self-signed certificate</strong> deedoop made. Your browser warns the first time on each device:
+    check that the fingerprint it shows matches the one below, then continue.{% endif %}
+    {% if not request_https %}<br><span class="warn-text">This page reached deedoop without HTTPS (through a proxy that is not in Trusted proxies?).</span>{% endif %}</p>
+  {% for p in tls.problems %}<p class="flash warn">{{ p }}</p>{% endfor %}
+  <dl class="kv">
+    <dt>SHA-256 fingerprint</dt><dd class="mono fingerprint">{{ tls.fingerprint }}</dd>
+    <dt>Valid until</dt><dd>{{ tls.not_after.strftime("%Y-%m-%d") }}{% if tls.days_left is not none %} <span class="muted">({{ tls.days_left }} days)</span>{% endif %}</dd>
+    <dt>Names</dt><dd class="mono">{{ tls.names | join(", ") }}</dd>
+  </dl>
+  {% if tls.source != "yours" %}
+  <p class="muted small">To use your own certificate, put <span class="mono">cert.pem</span> (with any intermediates) and
+    <span class="mono">key.pem</span> in the <span class="mono">tls</span> folder of deedoop's appdata and restart the container.
+    deedoop renews its self-signed certificate on a restart in the last {{ renew_days }} days.</p>
+  {% endif %}
+  {% else %}
+  <p><span class="pill">off</span> deedoop serves plain HTTP. That is fine on a home network you trust.</p>
+  <p class="muted small">To turn it on, set <span class="mono">DEEDOOP_HTTPS</span> to <span class="mono">on</span> in the container
+    settings (on Unraid: edit the deedoop container, <em>HTTPS</em>) and open deedoop with <span class="mono">https://</span>.
+    deedoop makes a self-signed certificate, or uses yours if you put <span class="mono">cert.pem</span> and
+    <span class="mono">key.pem</span> in the <span class="mono">tls</span> folder of its appdata.</p>
+  {% endif %}
+  <p class="muted small">From outside your home, use a VPN, or a reverse proxy with a real certificate (SWAG, Nginx Proxy Manager)
+    and set <em>Trusted proxies</em>.</p>
+</section>
+
+{% if signed_in %}
+<section class="card" id="account">
+  <h2>Admin account</h2>
+  <form method="post" action="/account/username" class="row">{% include "_csrf.html" %}
+    <label>User name <input type="text" name="username" value="{{ session.username }}" maxlength="64" required></label>
+    <button class="secondary">Rename</button>
+  </form>
+  <h3>Change the password</h3>
+  <form method="post" action="/account/password" class="stack" style="max-width:420px">{% include "_csrf.html" %}
+    <label>Current password <input type="password" name="current" autocomplete="current-password" required maxlength="1024"></label>
+    <label>New password <input type="password" name="password" autocomplete="new-password" required minlength="12" maxlength="1024"></label>
+    <label>New password again <input type="password" name="password2" autocomplete="new-password" required minlength="12" maxlength="1024"></label>
+    <button>Change password</button>
+  </form>
+  <p class="muted small">Changing the password signs out every other browser.</p>
+  <form method="post" action="/account/signout-all">{% include "_csrf.html" %}<button class="secondary">Sign out everywhere</button></form>
+</section>
+{% endif %}
+
+<section class="card" id="changes">
+  <h2>Changes to your files</h2>
+  <p class="muted">deedoop only reads your disks until you turn this on. Even then, nothing happens until you confirm a
+    list of changes on the <a href="/changes">Changes</a> screen, and every file is checked again just before it is touched.</p>
+  <p>Container access to /mnt:
+    {% if gate.writable %}<span class="pill ok">read-write</span>{% else %}<span class="pill warn">read-only</span>
+    <span class="muted small">To allow changes, edit the container and set the <span class="mono">/mnt</span> path's access mode to read/write.</span>{% endif %}</p>
+  <form method="post" action="/setup/changes">{% include "_csrf.html" %}
+    <label class="radio"><input type="checkbox" name="allow_changes" value="1" {{ "checked" if settings.allow_changes }}>
+      <strong>Allow changes:</strong> moving duplicates to quarantine, replacing them with hardlinks, and applying saved plans</label>
+    <label class="radio"><input type="checkbox" name="allow_direct_delete" value="1" {{ "checked" if settings.allow_direct_delete }}>
+      Also offer <strong>delete permanently</strong>, which skips the quarantine and cannot be undone</label>
+    <label>Delete quarantined files after <input type="number" name="quarantine_days" min="0" max="3650" value="{{ settings.quarantine_days }}" style="width:5em"> days
+      <span class="muted small">(0 keeps them until you empty the quarantine)</span></label>
+    <p class="muted small">The quarantine is a hidden <span class="mono">.deedoop-quarantine</span> folder inside each share folder on each disk,
+      so a file is renamed, not copied, stays on its disk, and does not create a new share. Scans skip it.</p>
+    {% if needs_confirm %}<label>Your password <span class="muted small">(needed to turn changes or permanent delete on)</span>
+      <input type="password" name="password" autocomplete="current-password" maxlength="1024"></label>{% endif %}
+    <button>Save</button>
+  </form>
+</section>
+
+<section class="card" id="benchmark">
+  <h2>Benchmark</h2>
+  <p class="muted">Reads a sample of large files from each selected disk alone, then from 2, 3, … disks at once, and measures
+  hashing speed. It proposes a disk mode; nothing changes until you apply it. Takes about {{ 10 }} seconds per disk and combination.</p>
+  {% if active and active.type == "benchmark" %}
+    {% include "_status.html" %}
+  {% else %}
+    <form method="post" action="/setup/benchmark">{% include "_csrf.html" %}<button {{ "disabled" if active }}>Run benchmark</button></form>
+    {% if active %}<p class="muted small">Wait for the current scan to finish first.</p>{% endif %}
+  {% endif %}
+  {% if bench %}
+  <h3>Last result <span class="muted small">{{ bench.created_at | time }}</span></h3>
+  <p>{{ bench.note }}</p>
+  <div class="cols">
+    <table>
+      <thead><tr><th>Disk alone</th><th class="num">MB/s</th></tr></thead>
+      {% for s in bench.solo %}<tr><td>{{ s.disk }}</td><td class="num">{{ s.mbps }}</td></tr>{% endfor %}
+      {% for s in bench.skipped %}<tr><td>{{ s.disk }}</td><td class="muted small">{{ s.reason }}</td></tr>{% endfor %}
+    </table>
+    <table>
+      <thead><tr><th>Disks together</th><th class="num">MB/s</th><th class="num">Sum alone</th><th class="num">Efficiency</th></tr></thead>
+      {% for c in bench.combos %}
+      <tr><td>{{ c.disks | length }} ({{ c.disks | join(", ") }})</td><td class="num">{{ c.aggregate_mbps }}</td>
+        <td class="num">{{ c.sum_of_solo_mbps }}</td><td class="num">{{ (c.efficiency * 100) | round | int }}%</td></tr>
+      {% else %}<tr><td colspan="4" class="muted">Only one disk measured.</td></tr>{% endfor %}
+    </table>
+  </div>
+  <p class="small">CPU: {{ bench.cpus }} cores, BLAKE3 {{ bench.hash_mbps_1_thread }} MB/s on one thread, {{ bench.hash_mbps_all_threads }} MB/s on all.</p>
+  <p><strong>Proposal:</strong>
+    {% if bench.proposal.disk_mode == "parallel" %}parallel, {{ bench.proposal.parallel_disks }} disks at once{% else %}one disk at a time{% endif %},
+    {{ bench.proposal.hash_threads }} hash thread{{ "s" if bench.proposal.hash_threads > 1 }} per file.</p>
+  <form method="post" action="/setup/benchmark/apply">{% include "_csrf.html" %}<button>Apply proposal</button></form>
+  {% endif %}
+</section>
+{% if signed_in %}
+<section class="card" id="security-log">
+  <h2>Security log</h2>
+  <p class="muted">Sign-ins, failed attempts, lockouts and every change request, newest first.</p>
+  {% if events %}
+  <table class="log">
+    <thead><tr><th>When</th><th>Event</th><th>User</th><th>Address</th><th>Detail</th></tr></thead>
+    {% for e in events %}<tr><td>{{ e.at | time }}</td><td>{{ e.event }}</td><td>{{ e.username }}</td><td class="mono small">{{ e.ip }}</td><td class="detail small">{{ e.detail }}</td></tr>{% endfor %}
+  </table>
+  {% else %}<p class="muted">Nothing yet.</p>{% endif %}
+</section>
+{% endif %}
+{% endblock %}

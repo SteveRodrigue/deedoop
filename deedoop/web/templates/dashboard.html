@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}Dashboard · deedoop{% endblock %}
+{% block content %}
+{% if not roots %}
+<section class="card callout">
+  <h2>Welcome to deedoop</h2>
+  <p>Pick the shares to scan on the <a href="/setup">Setup</a> screen, then start a scan here. deedoop only reads your
+  files until you turn on changes in Setup, and even then nothing is moved or removed until you confirm it.</p>
+</section>
+{% endif %}
+
+{% if raw_only %}
+<p class="flash ok">Raw content only: every scanner is off on the <a href="/setup#scanners">Setup</a> screen, so deedoop finds byte-identical files and nothing else.</p>
+{% endif %}
+<section class="card">
+  <h2>Scan</h2>
+  {% include "_status.html" %}
+</section>
+
+<section class="tiles">
+  <div class="tile"><div class="label">Reclaimable space</div><div class="value">{{ stats.total_wasted | bytes }}</div>
+    <div class="muted small">all methods, each copy counted once</div></div>
+  <div class="tile"><a href="/duplicates" class="label">Exact copies</a><div class="value">{{ "{:,}".format(stats.groups) }}</div>
+    <div class="muted small">groups, {{ stats.wasted | bytes }}</div></div>
+  {% if "image" in methods_on %}<div class="tile"><a href="/duplicates?method=image" class="label">Same photo, other metadata</a><div class="value">{{ "{:,}".format(stats.image_groups) }}</div>
+    <div class="muted small">groups, {{ stats.image_wasted | bytes }}</div></div>{% endif %}
+  {% if "media" in methods_on %}<div class="tile"><a href="/duplicates?method=media" class="label">Same recording, other tags</a><div class="value">{{ "{:,}".format(stats.media_groups) }}</div>
+    <div class="muted small">groups, {{ stats.media_wasted | bytes }}</div></div>{% endif %}
+  <div class="tile"><div class="label">Indexed</div><div class="value">{{ "{:,}".format(stats.files) }}</div>
+    <div class="muted small">files, {{ stats.bytes | bytes }}; {{ "{:,}".format(stats.media) }} with metadata{% if stats.videos or stats.songs %}, {{ "{:,}".format(stats.videos) }} videos, {{ "{:,}".format(stats.songs) }} songs{% endif %}</div></div>
+  {% if stats.similar_groups %}<div class="tile"><a href="/review" class="label">Similar photos</a><div class="value">{{ "{:,}".format(stats.similar_pending) }}</div>
+    <div class="muted small">pairs to review; {{ stats.similar_wasted | bytes }} possible, not counted above</div></div>{% endif %}
+  {% if stats.media_similar_groups %}<div class="tile"><a href="/review?kind=media" class="label">Re-encoded songs and videos</a><div class="value">{{ "{:,}".format(stats.media_similar_pending) }}</div>
+    <div class="muted small">pairs to review; {{ stats.media_similar_wasted | bytes }} possible, not counted above</div></div>{% endif %}
+  {% if stats.archives %}<div class="tile"><a href="/archives" class="label">Archives</a><div class="value">{{ "{:,}".format(stats.archives) }}</div>
+    <div class="muted small">{{ "{:,}".format(stats.archive_members) }} files inside, {{ "{:,}".format(stats.archive_new) }} not on disk yet</div></div>{% endif %}
+  <div class="tile"><div class="label">Index size</div><div class="value">{{ stats.index_bytes | bytes }}</div>
+    <div class="muted small">{{ "{:,}".format(stats.full_hashed) }} files fully hashed</div></div>
+</section>
+
+<div class="cols">
+<section class="card">
+  <h2>Reclaimable by type</h2>
+  {% if by_cat %}
+  {% set top = by_cat[0].wasted or 1 %}
+  <table>
+    {% for r in by_cat %}
+    <tr>
+      <td><a href="/duplicates?category={{ r.category }}">{{ r.category }}</a></td>
+      <td class="barcell"><span class="bar" style="width: {{ (100 * r.wasted / top) | round(1) }}%"></span></td>
+      <td class="num">{{ r.wasted | bytes }}</td>
+      <td class="num muted">{{ "{:,}".format(r.groups) }} group{{ "s" if r.groups != 1 }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}<p class="muted">Nothing yet.</p>{% endif %}
+</section>
+
+<section class="card">
+  <h2>Disks</h2>
+  {% if disks %}
+  <table>
+    <thead><tr><th>Disk</th><th class="num">Files</th><th class="num">Size</th><th>Last walked</th></tr></thead>
+    {% for d in disks %}
+    <tr><td>{{ d.disk }}</td><td class="num">{{ "{:,}".format(d.files) }}</td><td class="num">{{ d.bytes | bytes }}</td>
+      <td class="muted">{{ d.last_scan_at | time }}</td></tr>
+    {% endfor %}
+  </table>
+  {% else %}<p class="muted">No shares selected yet.</p>{% endif %}
+  {% if stats.errors %}<p class="small"><a href="/same-path#errors">{{ stats.errors }} files could not be read</a></p>{% endif %}
+</section>
+</div>
+{% endblock %}

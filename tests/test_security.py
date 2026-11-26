@@ -14,15 +14,15 @@ import pytest
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
-from deedup import auth, db, tls
-from deedup.control import Status
-from deedup.web.app import create_app
-from deedup.web.security import safe_next
-from deedup.worker import JobLogHandler
+from deedoop import auth, db, tls
+from deedoop.control import Status
+from deedoop.web.app import create_app
+from deedoop.web.security import safe_next
+from deedoop.worker import JobLogHandler
 from tests.conftest import TEST_PASSWORD, ensure_admin, sign_in
 from tests.test_web import make_client
 
-TEMPLATES = Path(__file__).parent.parent / "deedup" / "web" / "templates"
+TEMPLATES = Path(__file__).parent.parent / "deedoop" / "web" / "templates"
 # Tables a GET may write: the session's "last seen", the audit trail, sign-in throttling.
 VOLATILE = {"sessions", "security_log", "login_attempts", "lockouts"}
 
@@ -105,7 +105,7 @@ def test_signed_out_view_switch(unraid):
 
         _set(unraid, public_view=True)
         r = client.get("/duplicates")
-        assert r.status_code == 200 and "You are not signed in, so deedup is read-only" in r.text
+        assert r.status_code == 200 and "You are not signed in, so deedoop is read-only" in r.text
         assert "data-readonly" in r.text and "csrf_token" not in r.text
 
 
@@ -315,10 +315,10 @@ def test_dangerous_settings_ask_for_the_password_again(unraid):
 def test_reset_password_from_the_console(unraid, monkeypatch, capsys):
     import io
 
-    from deedup.__main__ import reset_password
+    from deedoop.__main__ import reset_password
 
     ensure_admin(unraid)
-    monkeypatch.setenv("DEEDUP_CONFIG", str(unraid.config_dir))
+    monkeypatch.setenv("DEEDOOP_CONFIG", str(unraid.config_dir))
     monkeypatch.setattr("sys.stdin", io.StringIO("a new console passphrase\n"))
     assert reset_password(stdin=True) == 0
     c = db.connect(unraid.db_path)
@@ -344,7 +344,7 @@ def test_redirects_stay_local(target, ok):
 
 
 def test_safe_for_exiftool():
-    from deedup.metadata import safe_for_exiftool
+    from deedoop.metadata import safe_for_exiftool
 
     assert safe_for_exiftool("/mnt/disk1/Photos/IMG 1 (copy).jpg")
     assert safe_for_exiftool("/mnt/disk1/Photos/-all=.jpg")  # absolute, so never an option
@@ -357,7 +357,7 @@ def test_a_file_name_cannot_add_exiftool_options(tmp_path):
     """A2: before M6.5 this name added -all=, which stripped the tags of the other photo."""
     import subprocess
 
-    from deedup.metadata import UNSAFE_NAME, Reader
+    from deedoop.metadata import UNSAFE_NAME, Reader
     from tests.test_images import jpeg, photo
 
     good = tmp_path / "good.jpg"
@@ -388,9 +388,9 @@ def _bomb(path: Path, size: int) -> None:
 
 
 def test_zip_bomb_is_skipped_quickly(tmp_path):
-    from deedup.archives import read_archive
-    from deedup.hashing import Expected
-    from deedup.limits import ArchiveTooLarge
+    from deedoop.archives import read_archive
+    from deedoop.hashing import Expected
+    from deedoop.limits import ArchiveTooLarge
 
     p = tmp_path / "bomb.zip"
     _bomb(p, 256 << 20)  # 256 MiB of zeros, about 250 KB on disk
@@ -405,9 +405,9 @@ def test_zip_bomb_is_skipped_quickly(tmp_path):
 def test_nested_bomb_counts_towards_its_parent(tmp_path):
     import zipfile
 
-    from deedup.archives import read_archive
-    from deedup.hashing import Expected
-    from deedup.limits import ArchiveTooLarge
+    from deedoop.archives import read_archive
+    from deedoop.hashing import Expected
+    from deedoop.limits import ArchiveTooLarge
 
     inner = tmp_path / "inner.zip"
     _bomb(inner, 128 << 20)
@@ -422,9 +422,9 @@ def test_nested_bomb_counts_towards_its_parent(tmp_path):
 def test_too_many_members(tmp_path, monkeypatch):
     import zipfile
 
-    from deedup import limits
-    from deedup.archives import read_archive
-    from deedup.hashing import Expected
+    from deedoop import limits
+    from deedoop.archives import read_archive
+    from deedoop.hashing import Expected
 
     monkeypatch.setattr(limits, "MAX_MEMBERS", 10)
     p = tmp_path / "many.zip"
@@ -437,7 +437,7 @@ def test_too_many_members(tmp_path, monkeypatch):
 
 
 def test_tar_names_keep_their_leading_dots():
-    from deedup.archives import _strip_dot_slash
+    from deedoop.archives import _strip_dot_slash
 
     assert _strip_dot_slash("./a/b.jpg") == "a/b.jpg"
     assert _strip_dot_slash(".hidden/x") == ".hidden/x"
@@ -448,7 +448,7 @@ def test_tar_names_keep_their_leading_dots():
 
 
 def test_custom_folder_cannot_be_a_symlink(unraid, conn):
-    from deedup.discovery import RootError, add_custom_root
+    from deedoop.discovery import RootError, add_custom_root
 
     outside = unraid.config_dir.parent / "outside"
     outside.mkdir()
@@ -462,7 +462,7 @@ def test_custom_folder_cannot_be_a_symlink(unraid, conn):
 
 
 def test_safepath_never_follows_a_swapped_folder(tmp_path):
-    from deedup import safepath
+    from deedoop import safepath
 
     share = tmp_path / "share"
     (share / "dir").mkdir(parents=True)
@@ -495,7 +495,7 @@ def test_safepath_never_follows_a_swapped_folder(tmp_path):
 
 
 def test_csv_cells_cannot_be_formulas():
-    from deedup.queries import csv_cell
+    from deedoop.queries import csv_cell
 
     assert csv_cell("=HYPERLINK(\"http://x\")") == "'=HYPERLINK(\"http://x\")"
     for v in ("+1", "-1", "@SUM(A1)", "\tx", "\rx"):
@@ -504,8 +504,8 @@ def test_csv_cells_cannot_be_formulas():
 
 
 def test_no_extractall():
-    """SC4: nothing in deedup extracts an archive to disk."""
-    src = Path(__file__).parent.parent / "deedup"
+    """SC4: nothing in deedoop extracts an archive to disk."""
+    src = Path(__file__).parent.parent / "deedoop"
     for f in src.rglob("*.py"):
         assert "extractall" not in f.read_text(), f
 
@@ -514,7 +514,7 @@ def test_no_extractall():
 
 
 def test_safe_for_ffmpeg():
-    from deedup.av import safe_for_ffmpeg
+    from deedoop.av import safe_for_ffmpeg
 
     assert safe_for_ffmpeg("/mnt/disk1/Music/AC:DC - Back in Black.mp3")
     assert safe_for_ffmpeg("/mnt/disk1/Music/-i.mp3")
@@ -526,7 +526,7 @@ def test_a_file_name_cannot_add_ffmpeg_options(monkeypatch):
     """SC3: a name with a line break is never handed to ffprobe or ffmpeg."""
     import subprocess
 
-    from deedup import av
+    from deedoop import av
 
     def boom(*a, **kw):
         raise AssertionError("a subprocess was started for an unsafe name")
@@ -537,14 +537,14 @@ def test_a_file_name_cannot_add_ffmpeg_options(monkeypatch):
         av.stream_hash("/mnt/disk1/x\n.mp3", 10)
 
 
-@pytest.mark.skipif(not __import__("deedup.av").av.tools_available(), reason="ffmpeg not installed")
+@pytest.mark.skipif(not __import__("deedoop.av").av.tools_available(), reason="ffmpeg not installed")
 def test_a_crafted_media_file_cannot_open_other_files(tmp_path):
     """SC3: a playlist in the backups must not make ffmpeg read another file
     (or a URL). Without -format_whitelist, ffmpeg opens the HLS playlist and
     hashes the file it points to."""
     import subprocess
 
-    from deedup import av
+    from deedoop import av
 
     secret = tmp_path / "secret.mp3"
     subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-f", "lavfi", "-i", "sine=d=1", str(secret)], check=True)
@@ -560,14 +560,14 @@ def test_a_crafted_media_file_cannot_open_other_files(tmp_path):
 
 
 
-@pytest.mark.skipif(not __import__("deedup.av").av.tools_available(), reason="ffmpeg not installed")
+@pytest.mark.skipif(not __import__("deedoop.av").av.tools_available(), reason="ffmpeg not installed")
 def test_m8_fingerprints_and_posters_cannot_open_other_files(tmp_path):
     """SC3 (M8): the new ffmpeg commands (Chromaprint, video frames, posters)
     use the same protocol and format whitelists, so a playlist or concat list
     in the backups cannot make them read another file."""
     import subprocess
 
-    from deedup import av
+    from deedoop import av
 
     secret = tmp_path / "secret.mkv"
     subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-f", "lavfi", "-i", "testsrc=d=15:s=64x64",
@@ -597,12 +597,12 @@ def test_scan_log_never_takes_sign_in_messages():
     st = Status()
     st.reset(job=1)
     handler = JobLogHandler(st)
-    root = logging.getLogger("deedup")
+    root = logging.getLogger("deedoop")
     root.addHandler(handler)
     try:
-        logging.getLogger("deedup.auth").warning("setup code: 123-456")
-        logging.getLogger("deedup.web").warning("something")
-        logging.getLogger("deedup.engine").warning("exiftool not found; skipping metadata")
+        logging.getLogger("deedoop.auth").warning("setup code: 123-456")
+        logging.getLogger("deedoop.web").warning("something")
+        logging.getLogger("deedoop.engine").warning("exiftool not found; skipping metadata")
     finally:
         root.removeHandler(handler)
     msgs = [m for _, _, m in st.drain_log()]
@@ -628,7 +628,7 @@ def test_https_refuses_old_tls(tmp_path):
 
 
 def _tls_cfg(tmp_path):
-    from deedup.config import AppConfig
+    from deedoop.config import AppConfig
 
     return AppConfig(config_dir=tmp_path / "config", mnt=tmp_path / "mnt", https=True,
                      tls_cert=tmp_path / "config/tls/cert.pem", tls_key=tmp_path / "config/tls/key.pem")

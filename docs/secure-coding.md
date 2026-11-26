@@ -1,6 +1,6 @@
 # Secure coding rules
 
-deedup holds the keys to someone's whole backup hoard, so every change follows
+deedoop holds the keys to someone's whole backup hoard, so every change follows
 these rules. Each rule has an id (SC1 to SC10) that code comments, tests and
 review use. Where a tool can check a rule, `make ci` and GitHub CI check it,
 and a broken rule fails the build.
@@ -9,12 +9,12 @@ and a broken rule fails the build.
 
 | Who | How they get in | What stops them |
 |---|---|---|
-| A web page you visit | Your browser posts a form to deedup on your LAN (CSRF), frames it (clickjacking) or rebinds a DNS name to it | SC1 sign-in + CSRF token + Origin check, `SameSite=Strict` cookies, `frame-ancestors 'none'`, optional host allow-list |
+| A web page you visit | Your browser posts a form to deedoop on your LAN (CSRF), frames it (clickjacking) or rebinds a DNS name to it | SC1 sign-in + CSRF token + Origin check, `SameSite=Strict` cookies, `frame-ancestors 'none'`, optional host allow-list |
 | Another device on your network | Opens the web UI, guesses the password | Signed out is read-only (SC1), Argon2id, lockout per address, slow-down per account |
 | A crafted file in your backups | A file name with a line break (ExifTool options), a zip bomb, a symlink swapped in after the scan, a name like `=HYPERLINK()` in a CSV export | SC3, SC4, SC2, SC7 |
 | A compromised dependency or image | A malicious or vulnerable package | SC9: hash-pinned lock file, pip-audit, Trivy, Dependabot, digest-pinned base image |
 
-deedup does not defend against someone with a shell on the Unraid server:
+deedoop does not defend against someone with a shell on the Unraid server:
 they can already read and change every file.
 
 ## The rules
@@ -22,7 +22,7 @@ they can already read and change every file.
 ### SC1 Writes need sign-in
 
 A route that changes anything uses `POST` (or another non-GET method). The
-app-wide guard in `deedup/web/security.py` then requires the signed-in admin,
+app-wide guard in `deedoop/web/security.py` then requires the signed-in admin,
 a valid CSRF token and a same-site `Origin`. Never add a route that bypasses
 the guard, and never change state in a `GET` (the thumbnail cache in
 `/config/thumbs` is the one named exception).
@@ -35,7 +35,7 @@ password is asked again after 10 minutes.
 *Checked by:* `test_every_non_get_route_needs_sign_in`,
 `test_no_get_route_writes_to_the_index`, `test_every_post_form_carries_the_csrf_token`.
 
-### SC2 Files on /mnt only through `deedup.safepath`
+### SC2 Files on /mnt only through `deedoop.safepath`
 
 Renames, links, deletes and new files on `/mnt` go through `safepath`, which
 opens every folder of the path with `O_NOFOLLOW` and acts through folder
@@ -108,7 +108,7 @@ plus the hashed theme snippet in `base.html` (the hash is computed at start).
 
 Every query and form value has a type and bounds (`Annotated[int, Query(ge=, le=)]`,
 `Form(max_length=)`). Redirect targets go through `safe_next()`. Values that
-leave deedup are escaped for where they land (`csv_cell()` for CSV).
+leave deedoop are escaped for where they land (`csv_cell()` for CSV).
 
 *Checked by:* `test_redirects_stay_local`, `test_csv_cells_cannot_be_formulas`.
 
@@ -119,7 +119,7 @@ messages, URLs or the database in plain form. Passwords are Argon2id hashes,
 session tokens are stored as SHA-256. `auth.event()` lines say what happened,
 never the secret. Compare secrets with `secrets.compare_digest`.
 
-With built-in HTTPS on (`tls.py`), the private key deedup makes is written
+With built-in HTTPS on (`tls.py`), the private key deedoop makes is written
 owner-only (0600) and atomically, so it never exists with looser permissions;
 the server accepts TLS 1.2 and 1.3 only, with forward-secret AEAD ciphers. A
 certificate that does not load falls back to the self-signed one rather than

@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Checks · deedoop{% endblock %}
+{% block content %}
+<section class="card">
+  <h2>Same path on two disks</h2>
+  <p class="muted">When a share spans disks, the same file path can exist on more than one disk. Unraid shows only one of
+  them under <code>/mnt/user</code>, so the other copy is hidden. They may or may not have the same content.</p>
+  {% if rows %}
+  <table>
+    <thead><tr><th>Share</th><th>Path</th><th>Disks</th><th class="num">Sizes</th></tr></thead>
+    {% for r in rows %}
+    <tr><td>{{ r.share }}</td><td class="path">{{ (r.dir ~ "/" if r.dir) ~ r.name }}</td><td>{{ r.disks }}</td>
+      <td class="num">{% if r.min_size == r.max_size %}{{ r.min_size | bytes }}{% else %}{{ r.min_size | bytes }} to {{ r.max_size | bytes }}{% endif %}</td></tr>
+    {% endfor %}
+  </table>
+  {% if rows | length >= 500 %}<p class="muted small">Showing the first 500.</p>{% endif %}
+  {% else %}<p class="muted">None found.</p>{% endif %}
+</section>
+
+<section class="card" id="errors">
+  <h2>Files that could not be read</h2>
+  {% if errors %}
+  <table>
+    <thead><tr><th>File</th><th>Problem</th></tr></thead>
+    {% for e in errors %}<tr><td class="path">{{ e.root_path }}/{{ (e.dir ~ "/" if e.dir) ~ e.name }}</td><td class="small">{{ e.error }}</td></tr>{% endfor %}
+  </table>
+  {% else %}<p class="muted">None.</p>{% endif %}
+</section>
+{% endblock %}

@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+{% block title %}{{ f.name }} · deedoop{% endblock %}
+{% block content %}
+<section class="card">
+  <h2 style="overflow-wrap:anywhere">{{ f.name }}</h2>
+  <p class="muted small" style="overflow-wrap:anywhere">{{ f.user_path }}</p>
+  <div class="cols">
+    <div>
+      {% if f.thumb %}<img class="thumb l" src="/thumb/{{ f.id }}?s=640" alt="Preview of {{ f.name }}">
+      {% elif f.playable and f.av and not f.av.error %}
+        {% if f.av.kind == "video" %}<video class="player" controls preload="metadata" src="/media/{{ f.id }}"></video>
+        {% else %}<audio class="player" controls preload="none" src="/media/{{ f.id }}"></audio>{% endif %}
+        <p class="muted small">Plays in your browser if it supports this format.</p>
+      {% else %}<p class="muted">No preview for this file type.</p>{% endif %}
+    </div>
+    <dl class="kv">
+      <dt>Size</dt><dd>{{ f.size | bytes }} ({{ "{:,}".format(f.size) }} bytes)</dd>
+      <dt>Modified</dt><dd>{{ f.mtime | time }}</dd>
+      <dt>Disk</dt><dd>{{ f.disk }}</dd>
+      <dt>{{ "Path on disk" if not f.container else "Physical path" }}</dt><dd class="mono">{{ f.path }}</dd>
+      {% if f.nlink > 1 %}<dt>Hardlinks</dt><dd>{{ f.nlink }} paths share this file</dd>{% endif %}
+      {% if f.mime %}<dt>Type</dt><dd>{{ f.mime }}</dd>{% endif %}
+      {% if f.taken_at %}<dt>Taken</dt><dd>{{ f.taken_at }}</dd>{% endif %}
+      {% if f.camera %}<dt>Camera</dt><dd>{{ f.camera }}</dd>{% endif %}
+      {% if f.dims %}<dt>Resolution</dt><dd>{{ f.dims }}</dd>{% endif %}
+      {% if f.length %}<dt>Length</dt><dd>{{ f.length }}</dd>{% endif %}
+      {% if f.gps %}<dt>GPS</dt><dd>{{ "%.6f" | format(f.gps_lat) }}, {{ "%.6f" | format(f.gps_lon) }}
+        <a class="small" href="https://www.openstreetmap.org/?mlat={{ f.gps_lat }}&mlon={{ f.gps_lon }}#map=15/{{ f.gps_lat }}/{{ f.gps_lon }}" rel="noreferrer noopener" target="_blank">map</a></dd>{% endif %}
+      {% if f.orientation and f.orientation != 1 %}<dt>Orientation</dt><dd>EXIF {{ f.orientation }}</dd>{% endif %}
+      {% if f.container %}<dt>Inside archive</dt><dd><a href="/file/{{ f.container.id }}">{{ f.container.path }}</a>
+        · <a class="small" href="/archives/{{ f.container.top_id }}">coverage</a></dd>{% endif %}
+      {% if f.sidecar %}<dt>Takeout JSON</dt><dd><a href="/file/{{ f.sidecar.json_file_id }}">sidecar</a>
+        {% if f.sidecar.taken_at %}· taken {{ f.sidecar.taken_at }}{% endif %}
+        {% if f.sidecar.lat is not none %}· GPS {{ "%.5f" | format(f.sidecar.lat) }}, {{ "%.5f" | format(f.sidecar.lon) }}{% endif %}
+        {% if f.sidecar.description %}<div class="muted small">{{ f.sidecar.description }}</div>{% endif %}</dd>{% endif %}
+      {% if f.error %}<dt>Problem</dt><dd>{{ f.error }}</dd>{% endif %}
+    </dl>
+  </div>
+</section>
+
+{% if f.av %}{% set v = f.av %}
+<section class="card">
+  <h2>{{ "Video" if v.kind == "video" else "Audio" }}</h2>
+  {% if v.error %}<p class="flash err">Could not be read: {{ v.error }}. Exact-copy matching still works for this file.</p>
+  {% else %}
+  <div class="cols">
+    <dl class="kv">
+      {% if v.container_label %}<dt>Container</dt><dd>{{ v.container_label }}</dd>{% endif %}
+      {% if v.vcodec %}<dt>Video</dt><dd>{{ v.vcodec }}{% if v.width %}, {{ v.width }}×{{ v.height }}{% endif %}{% if v.fps %}, {{ v.fps }} fps{% endif %}</dd>{% endif %}
+      {% if v.acodec %}<dt>Audio</dt><dd>{{ v.acodec }}{% if v.channels %}, {{ {1: "mono", 2: "stereo"}.get(v.channels, v.channels ~ " channels") }}{% endif %}{% if v.sample_rate %}, {{ "%.1f" | format(v.sample_rate / 1000) }} kHz{% endif %}</dd>{% endif %}
+      {% if v.bitrate %}<dt>Bitrate</dt><dd>{{ (v.bitrate / 1000) | round | int }} kbps</dd>{% endif %}
+      {% if v.has_cover %}<dt>Cover art</dt><dd>yes</dd>{% endif %}
+    </dl>
+    {% if v.title or v.artist or v.album %}
+    <dl class="kv">
+      {% if v.title %}<dt>Title</dt><dd>{{ v.title }}</dd>{% endif %}
+      {% if v.artist %}<dt>Artist</dt><dd><a href="/browse?view=music&artist={{ (v.album_artist or v.artist) | urlencode }}">{{ v.artist }}</a></dd>{% endif %}
+      {% if v.album_artist and v.album_artist != v.artist %}<dt>Album artist</dt><dd>{{ v.album_artist }}</dd>{% endif %}
+      {% if v.album %}<dt>Album</dt><dd>{{ v.album }}</dd>{% endif %}
+      {% if v.track %}<dt>Track</dt><dd>{{ v.track }}{% if v.disc %} (disc {{ v.disc }}){% endif %}</dd>{% endif %}
+      {% if v.year %}<dt>Year</dt><dd>{{ v.year }}</dd>{% endif %}
+      {% if v.genre %}<dt>Genre</dt><dd>{{ v.genre }}</dd>{% endif %}
+    </dl>
+    {% endif %}
+  </div>
+  {% endif %}
+</section>
+{% endif %}
+
+{% if f.archive %}{% set a = f.archive %}
+<section class="card">
+  <h2>Archive contents</h2>
+  {% if a.error %}<p class="flash err">Could not be read: {{ a.error }}</p>
+  {% else %}
+  <p>{{ "{:,}".format(a.media_members or 0) }} files inside: {{ "{:,}".format(a.cov_exact or 0) }} already on disk,
+    {{ "{:,}".format(a.cov_image or 0) }} same photo on disk, {{ "{:,}".format(a.cov_archive or 0) }} only in another archive,
+    {{ "{:,}".format(a.cov_new or 0) }} ({{ a.new_bytes | bytes }}) not on disk yet.</p>
+  <p><a href="/archives/{{ f.id }}">See what's inside</a>{% if a.takeout_set %} <span class="pill">Takeout{% if a.part %} part {{ a.part }}{% endif %}</span>{% endif %}</p>
+  {% endif %}
+</section>
+{% endif %}
+
+<section class="card">
+  <h2>Duplicates</h2>
+  {% if f.groups %}
+  <ul>
+    {% for g in f.groups %}
+    <li><a href="/duplicates?method={{ g.method }}&group={{ g.id }}">{{ {"exact": "Exact copy", "image": "Same photo, different metadata", "media": "Same recording, other tags", "similar": "Similar photo"}.get(g.method, g.method) }}</a>:
+      {{ g.copies }} copies, {{ g.wasted | bytes }} reclaimable</li>
+    {% endfor %}
+  </ul>
+  {% else %}<p class="muted">This file has no known duplicates.</p>{% endif %}
+</section>
+
+{% if similar %}
+<section class="card">
+  <h2>Similar photos</h2>
+  <div class="photos">
+    {% for p in similar %}
+    <div class="photo">
+      {% if p.thumb %}<a href="/file/{{ p.id }}"><img class="thumb m" loading="lazy" src="/thumb/{{ p.id }}" alt=""></a>{% endif %}
+      <div class="meta"><div><a href="/file/{{ p.id }}" title="{{ p.user_path }}">{{ p.name }}</a></div>
+        <div class="muted" title="{{ p.user_path }}">{{ p.folder }}</div>
+        <div>{{ p.size | bytes }}{% if p.dims %} · {{ p.dims }}{% endif %} · distance {{ p.pdist }}</div></div>
+    </div>
+    {% endfor %}
+  </div>
+  <p class="small"><a href="/review">Review similar photos</a></p>
+</section>
+{% endif %}
+
+<section class="card">
+  <h2>Hashes</h2>
+  {% if f.hashes %}
+  <dl class="kv">
+    {% set names = {"partial": "Quick hash (xxh3-128, first and last 64 KB)", "blake3": "Content (BLAKE3)",
+                    "img_exact": "Image data (BLAKE3, metadata ignored)", "img_none": "Image data",
+                    "phash": "Perceptual hash (pHash)", "dhash": "Perceptual hash (dHash)", "sim_none": "Perceptual hash",
+                    "stream": "Audio and video streams (tags and container ignored)", "stream_none": "Audio and video streams"} %}
+    {% for k, v in f.hashes.items() %}<dt>{{ names.get(k, k) }}</dt><dd class="mono">{{ v }}</dd>{% endfor %}
+  </dl>
+  {% else %}<p class="muted">Not hashed: no other file has the same size.</p>{% endif %}
+</section>
+{% endblock %}

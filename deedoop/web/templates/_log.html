@@ -1,0 +1,21 @@
+{# Scan log lines. Polled by htmx every 5 s while the job runs. #}
+<div id="scan-log" {% if running %}hx-get="/log?job={{ job.id }}&level={{ level }}&partial=1" hx-trigger="every 5s" hx-swap="outerHTML"{% endif %}>
+{% if not job %}
+  <p class="muted">No scan yet.</p>
+{% elif rows %}
+  <table class="log scan-log">
+    <thead><tr><th>Time</th><th>Level</th><th>Message</th></tr></thead>
+    <tbody>
+    {% for r in rows %}
+      <tr class="{{ r.level }}"><td class="nowrap">{{ r.at | clock }}</td>
+        <td>{% if r.level == "info" %}<span class="muted">info</span>{% else %}<span class="pill {{ 'warn' if r.level == 'warn' else 'err' }}">{{ "warning" if r.level == "warn" else "error" }}</span>{% endif %}</td>
+        <td class="msg">{{ r.message }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% if rows | length >= limit %}<p class="muted small">Showing the first {{ "{:,}".format(limit) }} lines.</p>{% endif %}
+{% else %}
+  <p class="muted">{% if level == "warn" %}No warnings or errors.{% else %}Nothing logged for this job{% if job.id and not running %} (it ran before deedoop kept logs){% endif %}.{% endif %}</p>
+{% endif %}
+{% if running %}<p class="muted small">This job is running; new lines appear every few seconds.</p>{% endif %}
+</div>

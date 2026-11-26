@@ -7,8 +7,8 @@ import zipfile
 
 import pytest
 
-from deedup import db
-from deedup.archives import match_sidecars, parse_sidecar, sidecar_base, takeout_part
+from deedoop import db
+from deedoop.archives import match_sidecars, parse_sidecar, sidecar_base, takeout_part
 from tests.conftest import scan, write
 from tests.test_images import jpeg, photo
 

@@ -11,3 +11,9 @@ dist/
 *.db-shm
 .local-exiftool/
 .ca-local.crt
+
+# Local design work, not committed yet: deedoop brand exploration and the
+# impeccable design skill (https://github.com/pbakaus/impeccable).
+branding/
+.claude/skills/impeccable/
+.impeccable/

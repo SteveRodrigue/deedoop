@@ -7,8 +7,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from deedup import av, changes, db, media_similar, queries, scanners
-from deedup.engine import regroup
+from deedoop import av, changes, db, media_similar, queries, scanners
+from deedoop.engine import regroup
 from tests.conftest import scan
 
 needs_ffmpeg = pytest.mark.skipif(not av.tools_available(), reason="ffmpeg/ffprobe not installed")

@@ -6,8 +6,8 @@ import numpy as np
 import pytest
 from PIL import Image, ImageDraw
 
-from deedup import db, similar
-from deedup.similar import distance, near_pairs, similar_hashes
+from deedoop import db, similar
+from deedoop.similar import distance, near_pairs, similar_hashes
 from tests.conftest import scan, write
 
 
@@ -118,7 +118,7 @@ def test_scan_finds_similar_pairs_groups_and_archive_coverage(unraid, conn, phot
     small = conn.execute("SELECT size FROM files WHERE name = 'IMG_0001.jpg'").fetchone()[0]
     assert small in {x["wasted"] for x in g}
     # suggestions are not counted in the dashboard total
-    from deedup.queries import index_stats
+    from deedoop.queries import index_stats
 
     st = index_stats(conn, unraid.db_path)
     assert st["total_wasted"] == 0 and st["similar_pending"] == 2

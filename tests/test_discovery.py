@@ -1,7 +1,7 @@
 import pytest
 
-from deedup import db
-from deedup.discovery import RootError, add_custom_root, list_disks, list_shares, sync_share_roots
+from deedoop import db
+from deedoop.discovery import RootError, add_custom_root, list_disks, list_shares, sync_share_roots
 
 
 def test_lists_disks_pools_and_unassigned(unraid):
