@@ -20,7 +20,7 @@
 ## Supported versions
 
 Only the latest release gets security fixes. Images are tagged with their
-version (for example `ghcr.io/steverodrigue/deedup:0.7.0`) and `latest`.
+version (for example `ghcr.io/steverodrigue/deedup:0.7.5`) and `latest`.
 
 ## Reporting a vulnerability
 
@@ -33,10 +33,13 @@ which version you ran. You will get an answer within a week.
 ## Running deedup safely
 
 - Keep `/mnt` read-only unless you are about to remove duplicates or apply a plan.
-- deedup speaks plain HTTP on your LAN. For access from outside your home,
-  use a VPN (Tailscale, WireGuard) or a reverse proxy with HTTPS (SWAG, Nginx
-  Proxy Manager), and set `DEEDUP_TRUSTED_PROXIES` to the proxy's address so
-  deedup sees the real client address and marks its cookie `Secure`.
+- deedup speaks plain HTTP on your LAN unless you set `DEEDUP_HTTPS=on`; then
+  it serves HTTPS (TLS 1.2 and 1.3) with your certificate, or a self-signed one
+  whose fingerprint the Setup screen shows, and marks its cookie `Secure`.
+- For access from outside your home, use a VPN (Tailscale, WireGuard) or a
+  reverse proxy with HTTPS (SWAG, Nginx Proxy Manager), and set
+  `DEEDUP_TRUSTED_PROXIES` to the proxy's address so deedup sees the real
+  client address and marks its cookie `Secure`.
 - Forgot the admin password? From the Unraid terminal:
   `docker exec -it deedup deedup reset-password`.
 

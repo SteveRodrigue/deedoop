@@ -16,13 +16,47 @@ from .config import load
 
 
 def serve() -> None:
+    import ssl
+
     import uvicorn
 
+    from . import tls
     from .web.app import create_app
 
     cfg = load()
-    uvicorn.run(create_app(cfg), host=cfg.host, port=cfg.port, log_level="info", access_log=False,
-                server_header=False)
+    info = tls.prepare(cfg)
+    extra = {}
+    if info.enabled:
+        # SC8: TLS 1.2+ with forward-secret AEAD ciphers (tls.CIPHERS).
+        extra = {"ssl_certfile": str(info.cert_path), "ssl_keyfile": str(info.key_path),
+                 "ssl_version": ssl.PROTOCOL_TLS_SERVER, "ssl_ciphers": tls.CIPHERS}
+        logging.getLogger("deedup.tls").info(
+            "HTTPS on with %s certificate, SHA-256 fingerprint %s",
+            "your" if info.source == "yours" else "a self-signed", info.fingerprint)
+        for p in info.problems:
+            logging.getLogger("deedup.tls").warning("%s", p)
+    uvicorn.run(create_app(cfg, tls_info=info), host=cfg.host, port=cfg.port, log_level="info",
+                access_log=False, server_header=False, **extra)
+
+
+def healthcheck() -> int:
+    """For Docker's HEALTHCHECK: 0 when the web UI answers, over HTTP or HTTPS."""
+    import ssl
+    import urllib.request
+
+    cfg = load()
+    scheme = "https" if cfg.https else "http"
+    ctx = None
+    if cfg.https:
+        # Our own certificate on 127.0.0.1, possibly self-signed: only that the server answers matters here.
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+    try:
+        with urllib.request.urlopen(f"{scheme}://127.0.0.1:{cfg.port}/healthz", timeout=4, context=ctx) as r:  # noqa: S310 - fixed local URL
+            return 0 if r.status == 200 else 1
+    except OSError:
+        return 1
 
 
 def reset_password(stdin: bool = False) -> int:
@@ -63,11 +97,14 @@ def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(prog="deedup", description="deedup: dedupe your hoard, safely.")
     sub = p.add_subparsers(dest="cmd")
     sub.add_parser("serve", help="start the web UI (the default)")
+    sub.add_parser("healthcheck", help="exit 0 if the web UI answers (for Docker)")
     rp = sub.add_parser("reset-password", help="set a new admin password and sign out every browser")
     rp.add_argument("--stdin", action="store_true", help="read the password from standard input")
     args = p.parse_args(argv)
     if args.cmd == "reset-password":
         sys.exit(reset_password(args.stdin))
+    if args.cmd == "healthcheck":
+        sys.exit(healthcheck())
     serve()
 
 

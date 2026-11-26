@@ -43,6 +43,9 @@ class Scanner:
     exts: frozenset[str] = field(default_factory=frozenset)
     index: str = ""
     after_hashes: str = ""
+    index_phases: tuple[str, ...] = ()   # progress phases its hooks may run, for "phase x of y"
+    after_phases: tuple[str, ...] = ()
+    plan: str = ""                  # optional hook(settings) -> the phases it will run with these settings
     group: str = ""
     drop: str = ""
 
@@ -59,7 +62,8 @@ REGISTRY: dict[str, Scanner] = {s.key: s for s in [
         finds="Same photo with different metadata, and similar photos (recompressed or resized) for you to review.",
         cost="Reads every photo once in full.",
         methods=("image", "similar"), exts=frozenset(exts_for("image")),
-        index="deedup.engine:photo_index", group="deedup.engine:photo_group", drop="deedup.engine:photo_drop",
+        index="deedup.engine:photo_index", index_phases=("hash_image", "hash_similar"),
+        plan="deedup.engine:photo_plan", group="deedup.engine:photo_group", drop="deedup.engine:photo_drop",
     ),
     Scanner(
         key="video", label="Videos",
@@ -68,6 +72,7 @@ REGISTRY: dict[str, Scanner] = {s.key: s for s in [
         cost="Reads video headers; reads in full only videos that share a length and stream layout with another.",
         methods=("media",), tools=("ffprobe", "ffmpeg"), exts=frozenset(exts_for("video")),
         index="deedup.media_index:index", after_hashes="deedup.media_index:after_hashes",
+        index_phases=("probe",), after_phases=("hash_stream",),
         group="deedup.media_index:group", drop="deedup.media_index:drop",
     ),
     Scanner(
@@ -76,6 +81,7 @@ REGISTRY: dict[str, Scanner] = {s.key: s for s in [
         cost="Reads audio headers; reads in full only songs that share a length and stream layout with another.",
         methods=("media",), tools=("ffprobe", "ffmpeg"), exts=frozenset(exts_for("audio")),
         index="deedup.media_index:index", after_hashes="deedup.media_index:after_hashes",
+        index_phases=("probe",), after_phases=("hash_stream",),
         group="deedup.media_index:group", drop="deedup.media_index:drop",
     ),
     Scanner(
@@ -83,7 +89,7 @@ REGISTRY: dict[str, Scanner] = {s.key: s for s in [
         finds="Opens zip, tar and 7z files in your Takeout folders and compares their contents with your disks.",
         cost="Reads each archive once in full; never extracts anything.",
         methods=(), exts=frozenset(exts_for("archive")),
-        index="deedup.engine:archive_index", group="deedup.engine:archive_group",
+        index="deedup.engine:archive_index", index_phases=("archives", "sidecars"), group="deedup.engine:archive_group",
     ),
 ]}
 
@@ -146,6 +152,33 @@ def exiftool_exts(settings: dict) -> set[str]:
         if active(settings, k):
             want |= REGISTRY[k].exts
     return METADATA_EXTS & want
+
+
+def plan(settings: dict) -> list[str]:
+    """The phases a scan with these settings goes through, in order, for the
+    "phase x of y" progress."""
+    from .metadata import exiftool_available
+
+    on = active_keys(settings)
+
+    def phases(key: str, which: str) -> tuple[str, ...]:
+        s = REGISTRY[key]
+        ph = getattr(s, which)
+        if s.plan and ph:
+            keep = hook(s.plan)(settings)
+            ph = tuple(p for p in ph if p in keep)
+        return ph
+
+    out = ["walk"]
+    for k in on:
+        out += phases(k, "index_phases")
+    if settings.get("metadata") and exiftool_exts(settings) and exiftool_available():
+        out.append("metadata")
+    out += ["hash_partial", "hash_full"]
+    for k in on:
+        out += phases(k, "after_phases")
+    out.append("group")
+    return list(dict.fromkeys(out))
 
 
 def hook(path: str) -> Callable:

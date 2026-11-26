@@ -25,9 +25,12 @@ from ..archives import read_member_bytes
 from ..categories import CATEGORIES
 from ..config import AppConfig
 from ..config import load as load_config
+from ..control import PHASE_NAMES, progress_view
+from ..control import fmt_bytes as human_bytes
 from ..discovery import RootError, add_custom_root, list_disks, list_shares, remove_root, sync_share_roots
 from ..imaging import THUMB_EXTS, NotAnImage, make_thumbnail
 from ..metadata import exiftool_available
+from ..tls import RENEW_DAYS, TlsInfo
 from ..worker import Worker
 from . import security
 from .security import safe_next
@@ -37,15 +40,6 @@ HERE = Path(__file__).parent
 # Typed, bounded query and form values (SC7).
 Page = Annotated[int, Query(ge=1, le=1_000_000)]
 MinMb = Annotated[float, Query(ge=0, le=1e9)]
-
-
-def human_bytes(n: float | None) -> str:
-    n = float(n or 0)
-    for unit in ("B", "KB", "MB", "GB", "TB", "PB"):
-        if abs(n) < 1000 or unit == "PB":
-            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
-        n /= 1000
-    return f"{n:.1f} PB"
 
 
 def fmt_time(ts: float | None) -> str:
@@ -65,7 +59,8 @@ def _lines(text: str) -> list[str]:
     return [line.strip() for line in text.splitlines() if line.strip()]
 
 
-def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start_worker: bool = True) -> FastAPI:
+def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start_worker: bool = True,
+               tls_info: TlsInfo | None = None) -> FastAPI:
     cfg = cfg or load_config()
     db.init(cfg.db_path)
     worker = worker or Worker(cfg)
@@ -107,6 +102,8 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
     templates.env.filters["bytes"] = human_bytes
     templates.env.filters["time"] = fmt_time
     templates.env.globals["version"] = __version__
+    templates.env.globals["phase_names"] = PHASE_NAMES
+    templates.env.filters["clock"] = lambda ts: dt.datetime.fromtimestamp(ts).strftime("%H:%M:%S") if ts else ""
 
     def conn():
         return db.connect(cfg.db_path)
@@ -126,13 +123,19 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
             "SELECT * FROM jobs WHERE state NOT IN ('queued', 'running') AND type = 'scan' ORDER BY id DESC LIMIT 1"
         ).fetchone()
         live = worker.status.snapshot() if worker.current_job else {}
-        elapsed = fmt_duration(dt.datetime.now().timestamp() - live["started"]) if live.get("started") else ""
+        now = dt.datetime.now().timestamp()
+        elapsed = fmt_duration(now - live["started"]) if live.get("started") else ""
+        last_progress = json.loads(last["progress"]) if last else {}
+        last_walked = sum(d.get("walked", 0) for d in (last_progress.get("disks") or {}).values()) \
+            if last and last["state"] == "done" else 0
         return {
             "active": dict(active) if active else None,
             "last": dict(last) if last else None,
-            "last_progress": json.loads(last["progress"]) if last else {},
+            "last_progress": last_progress,
             "live": live,
             "elapsed": elapsed,
+            "pv": progress_view(live, now, last_walked) if live else {},
+            "log_tail": worker.status.recent_log(6) if worker.current_job else [],
             "paused": worker.control.paused if worker.current_job else False,
         }
 
@@ -352,7 +355,8 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
                           bench=json.loads(bench["result"]) if bench else None, error=error, saved=saved,
                           mnt=str(cfg.mnt), exiftool=exiftool_available(), gate=changes.gate(c, cfg.mnt),
                           scanner_rows=scanners.status(settings), raw_only=scanners.raw_only(settings),
-                          events=auth.recent_events(c) if request.state.session else [], **job_view(c))
+                          tls=tls_info or TlsInfo(), request_https=network.is_https(request),
+                          renew_days=RENEW_DAYS, events=auth.recent_events(c) if request.state.session else [], **job_view(c))
         finally:
             c.close()
 
@@ -1000,6 +1004,26 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
         try:
             return render(request, "same_path.html", rows=queries.same_path_on_two_disks(c),
                           errors=queries.file_errors(c))
+        finally:
+            c.close()
+
+    @app.get("/log", response_class=HTMLResponse)
+    def scan_log(request: Request, job: Annotated[int, Query(ge=0)] = 0, level: Annotated[str, Query(max_length=8)] = "all",
+                 partial: bool = False):
+        """The scan log of one job (milestone 7.5); the latest job by default."""
+        c = conn()
+        try:
+            jobs = c.execute("SELECT id, type, state, started_at, finished_at FROM jobs "
+                             "WHERE started_at IS NOT NULL ORDER BY id DESC LIMIT ?", (db.LOG_KEEP_JOBS,)).fetchall()
+            chosen = next((j for j in jobs if j["id"] == job), jobs[0] if jobs else None)
+            warnings_only = level == "warn"
+            rows = db.job_log(c, chosen["id"], warnings_only) if chosen else []
+            running = bool(chosen and chosen["state"] in ("queued", "running"))
+            ctx = {"jobs": jobs, "job": chosen, "rows": rows, "level": "warn" if warnings_only else "all",
+                   "running": running, "limit": 2000}
+            if partial:
+                return templates.TemplateResponse(request, "_log.html", ctx)
+            return render(request, "log.html", **ctx)
         finally:
             c.close()
 

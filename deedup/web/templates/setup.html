@@ -169,6 +169,36 @@
   {% endif %}
 </section>
 
+<section class="card" id="https">
+  <h2>HTTPS</h2>
+  {% if tls.enabled %}
+  <p><span class="pill ok">on</span>
+    {% if tls.source == "yours" %}with <strong>your certificate</strong>.
+    {% else %}with a <strong>self-signed certificate</strong> deedup made. Your browser warns the first time on each device:
+    check that the fingerprint it shows matches the one below, then continue.{% endif %}
+    {% if not request_https %}<br><span class="warn-text">This page reached deedup without HTTPS (through a proxy that is not in Trusted proxies?).</span>{% endif %}</p>
+  {% for p in tls.problems %}<p class="flash warn">{{ p }}</p>{% endfor %}
+  <dl class="kv">
+    <dt>SHA-256 fingerprint</dt><dd class="mono fingerprint">{{ tls.fingerprint }}</dd>
+    <dt>Valid until</dt><dd>{{ tls.not_after.strftime("%Y-%m-%d") }}{% if tls.days_left is not none %} <span class="muted">({{ tls.days_left }} days)</span>{% endif %}</dd>
+    <dt>Names</dt><dd class="mono">{{ tls.names | join(", ") }}</dd>
+  </dl>
+  {% if tls.source != "yours" %}
+  <p class="muted small">To use your own certificate, put <span class="mono">cert.pem</span> (with any intermediates) and
+    <span class="mono">key.pem</span> in the <span class="mono">tls</span> folder of deedup's appdata and restart the container.
+    deedup renews its self-signed certificate on a restart in the last {{ renew_days }} days.</p>
+  {% endif %}
+  {% else %}
+  <p><span class="pill">off</span> deedup serves plain HTTP. That is fine on a home network you trust.</p>
+  <p class="muted small">To turn it on, set <span class="mono">DEEDUP_HTTPS</span> to <span class="mono">on</span> in the container
+    settings (on Unraid: edit the deedup container, <em>HTTPS</em>) and open deedup with <span class="mono">https://</span>.
+    deedup makes a self-signed certificate, or uses yours if you put <span class="mono">cert.pem</span> and
+    <span class="mono">key.pem</span> in the <span class="mono">tls</span> folder of its appdata.</p>
+  {% endif %}
+  <p class="muted small">From outside your home, use a VPN, or a reverse proxy with a real certificate (SWAG, Nginx Proxy Manager)
+    and set <em>Trusted proxies</em>.</p>
+</section>
+
 {% if signed_in %}
 <section class="card" id="account">
   <h2>Admin account</h2>

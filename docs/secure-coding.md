@@ -117,7 +117,16 @@ messages, URLs or the database in plain form. Passwords are Argon2id hashes,
 session tokens are stored as SHA-256. `auth.event()` lines say what happened,
 never the secret. Compare secrets with `secrets.compare_digest`.
 
-*Checked by:* ruff `S105`/`S106`/`S107`, `test_session_cookie_flags_and_sign_out`.
+With built-in HTTPS on (`tls.py`), the private key deedup makes is written
+owner-only (0600) and atomically, so it never exists with looser permissions;
+the server accepts TLS 1.2 and 1.3 only, with forward-secret AEAD ciphers. A
+certificate that does not load falls back to the self-signed one rather than
+to plain HTTP. The scan log takes warnings from the scan modules only, never
+from the sign-in code, so it cannot hold a setup code or password.
+
+*Checked by:* ruff `S105`/`S106`/`S107`, `test_session_cookie_flags_and_sign_out`,
+`test_self_signed_key_is_owner_only`, `test_https_refuses_old_tls`,
+`test_scan_log_never_takes_sign_in_messages`.
 
 ### SC9 Pinned and audited dependencies
 

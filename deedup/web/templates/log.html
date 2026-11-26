@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Scan log · deedup{% endblock %}
+{% block content %}
+<section class="card">
+  <div class="row between">
+    <h2>Scan log</h2>
+    <form method="get" action="/log" class="row">
+      <label class="inline">Job
+        <select name="job">
+          {% for j in jobs %}<option value="{{ j.id }}" {{ "selected" if job and j.id == job.id }}>#{{ j.id }} {{ j.type }}, {{ j.started_at | time }} ({{ j.state }})</option>{% endfor %}
+        </select></label>
+      <label class="inline">Show
+        <select name="level">
+          <option value="all" {{ "selected" if level == "all" }}>everything</option>
+          <option value="warn" {{ "selected" if level == "warn" }}>warnings and errors</option>
+        </select></label>
+      <button class="secondary">Show</button>
+    </form>
+  </div>
+  <p class="muted small">What each scan did: its phases and how long they took, and every file or folder it could not read.
+    deedup keeps the logs of the last 30 jobs.</p>
+  {% include "_log.html" %}
+</section>
+{% endblock %}

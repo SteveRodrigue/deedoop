@@ -35,6 +35,8 @@ are not optional.
   filesystem writes.
 - `deedup/archives.py` + `deedup/limits.py` archive reading.
 - `deedup/metadata.py` ExifTool and `deedup/av.py` ffprobe/ffmpeg (the only subprocesses).
+- `deedup/tls.py` built-in HTTPS (your certificate or a self-signed one);
+  `deedup/control.py` progress, ETA and the scan log lines.
 - `deedup/scanners.py` the scanner registry: photo, video, audio and archive
   analysis are plugins an admin can turn off. A new kind of analysis is a new
   `Scanner` row with hooks, never an `if` in the engine.
