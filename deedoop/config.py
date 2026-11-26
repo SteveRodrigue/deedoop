@@ -7,7 +7,6 @@ instead; see ``db.py``.
 
 from __future__ import annotations
 
-import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -41,26 +40,15 @@ class AppConfig:
 
     @property
     def db_path(self) -> Path:
-        # Installs from before the rename keep their index under the old file name;
-        # renaming it ourselves could split it from its -wal/-shm files.
-        new, old = self.config_dir / "deedoop.db", self.config_dir / "deedup.db"
-        return old if old.exists() and not new.exists() else new
+        return self.config_dir / "deedoop.db"
 
 
 ON = {"1", "on", "true", "yes"}
-log = logging.getLogger("deedoop.config")
 
 
 def env(name: str, default: str | None = None) -> str | None:
-    """``DEEDOOP_<name>``, or the ``DEEDUP_<name>`` an install from before the rename still has."""
-    value = os.environ.get("DEEDOOP_" + name)
-    if value is None:
-        value = os.environ.get("DEEDUP_" + name)
-        if value is not None:
-            # Only the variable name is logged, never its value (SC7: it may be a password).
-            log.warning("DEEDUP_%s is the old name of DEEDOOP_%s. It still works; rename it in the container settings.",
-                        name, name)
-    return default if value is None else value
+    """``DEEDOOP_<name>`` from the environment."""
+    return os.environ.get("DEEDOOP_" + name, default)
 
 
 def load() -> AppConfig:

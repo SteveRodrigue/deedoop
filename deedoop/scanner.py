@@ -32,9 +32,6 @@ class WalkResult:
 
 
 QUARANTINE_DIR = ".deedoop-quarantine"
-# Quarantines made before the rename. Never indexed, and still purged and restored.
-LEGACY_QUARANTINE_DIR = ".deedup-quarantine"
-QUARANTINE_DIRS = (QUARANTINE_DIR, LEGACY_QUARANTINE_DIR)
 
 
 class Excluder:
@@ -42,7 +39,7 @@ class Excluder:
         self.patterns = [p.strip().strip("/") for p in patterns if p.strip()]
 
     def __call__(self, name: str, rel: str) -> bool:
-        if name in QUARANTINE_DIRS:
+        if name == QUARANTINE_DIR:
             return True  # deedoop's own quarantine is never indexed
         for p in self.patterns:
             if fnmatch.fnmatchcase(name, p) or fnmatch.fnmatchcase(rel, p):

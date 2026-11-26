@@ -1,19 +1,24 @@
-# deedoop
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/deedoop-wordmark-dark.svg">
+    <img src="docs/images/deedoop-wordmark-light.svg" alt="deedoop" height="56">
+  </picture>
+</h1>
 
-**deedoop: dedupe your hoard, safely.**
+**Dedupe your hoard, safely.** In the logo, the second e and o are greyed out: the copies deedoop finds for you.
 
 deedoop finds the duplicates other tools miss on your Unraid server: identical files with different names, photos that differ only in their metadata, re-compressed copies, and the contents of Google Takeout zips you've already got on disk. It indexes your terabytes incrementally, one disk at a time, and shows you everything before touching a single file.
 
-## Upgrading from deedup
+## Screenshots
 
-deedup was renamed deedoop in 0.9.0. An existing install keeps working without changes:
-
-- The image is still published under the old name too (`ghcr.io/steverodrigue/deedup`), so the old template keeps updating. Switch the Repository to `ghcr.io/steverodrigue/deedoop:latest` when convenient.
-- Keep your `/config` pointed at your existing appdata folder (for example `/mnt/user/appdata/deedup`). deedoop finds the old `deedup.db` there and keeps using it.
-- Old `DEEDUP_*` variables still work; the log asks you to rename them to `DEEDOOP_*`.
-- Files quarantined as `.deedup-quarantine` can still be restored and are still emptied on schedule.
-- The `deedup` command still works next to `deedoop` (for `reset-password`).
-- You are signed out once, because the session cookie was renamed.
+<p>
+  <img src="docs/images/dashboard-light.png" alt="Dashboard after a scan: reclaimable space, exact copies, similar photos and disks" width="49%">
+  <img src="docs/images/duplicates-dark.png" alt="Exact copies in the dark theme, with the copy to keep selected in each group" width="49%">
+</p>
+<p>
+  <img src="docs/images/similar-light.png" alt="Similar photos: resized and recompressed copies side by side, with a suggested keeper" width="73%">
+  <img src="docs/images/phone-dark.png" alt="Duplicates on a phone in the dark theme" width="24%">
+</p>
 
 ## Status: milestone 8
 

@@ -40,7 +40,7 @@ import blake3
 from . import db, safepath
 from .control import Control, Status, Stopped
 from .hashing import Expected, FileChanged, full_hash
-from .scanner import QUARANTINE_DIR, QUARANTINE_DIRS
+from .scanner import QUARANTINE_DIR
 
 log = logging.getLogger(__name__)
 
@@ -886,8 +886,7 @@ def run_purge(ctx: RunContext) -> dict:
         for it in items:
             ctx.control.checkpoint()
             q = it["quarantine"] or (it["dst_path"] if a["kind"] == "remove" else "")
-            qdir = next((d for d in QUARANTINE_DIRS if f"/{d}/{a['id']}/" in q), None) if q else None
-            if qdir is None:
+            if not q or f"/{QUARANTINE_DIR}/{a['id']}/" not in q:
                 continue
             _inside(q, ctx.mnt)
             try:
@@ -895,7 +894,7 @@ def run_purge(ctx: RunContext) -> dict:
             except Skip:
                 continue
             purged += 1
-            roots.add(q.split(f"/{qdir}/")[0] + f"/{qdir}")
+            roots.add(q.split(f"/{QUARANTINE_DIR}/")[0] + f"/{QUARANTINE_DIR}")
             conn.execute("UPDATE action_items SET status = 'purged' WHERE action_id = ? AND seq = ?",
                          (a["id"], it["seq"]))
         for r in roots:  # remove the emptied folders, never anything with files left in it

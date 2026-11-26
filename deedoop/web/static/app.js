@@ -1,9 +1,8 @@
 // Theme toggle: System (default), Light or Dark, remembered in this browser.
 (function () {
   var KEY = "deedoop-theme";
-  var OLD_KEY = "deedup-theme";  // saved before the rename to deedoop
   function get() {
-    try { return localStorage.getItem(KEY) || localStorage.getItem(OLD_KEY) || "system"; } catch (e) { return "system"; }
+    try { return localStorage.getItem(KEY) || "system"; } catch (e) { return "system"; }
   }
   function apply(choice) {
     var root = document.documentElement;
