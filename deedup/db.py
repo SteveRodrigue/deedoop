@@ -342,6 +342,43 @@ MIGRATIONS: list[str] = [
     ALTER TABLE actions ADD COLUMN username TEXT NOT NULL DEFAULT '';
     ALTER TABLE actions ADD COLUMN ip TEXT NOT NULL DEFAULT '';
     """,
+    # v8: milestone 7, video and audio (ffprobe headers; stream hashes go in hashes)
+    """
+    CREATE TABLE av (
+        file_id      INTEGER PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE,
+        kind         TEXT NOT NULL,       -- audio or video, from the streams
+        container    TEXT,                -- ffprobe format name, e.g. 'mov,mp4,m4a,3gp,3g2,mj2'
+        duration     REAL,                -- seconds
+        bitrate      INTEGER,             -- bits per second, whole file
+        vcodec       TEXT,
+        width        INTEGER,
+        height       INTEGER,
+        fps          REAL,
+        acodec       TEXT,
+        channels     INTEGER,
+        sample_rate  INTEGER,
+        layout       TEXT NOT NULL DEFAULT '',  -- stream signature: stream-hash candidates share it
+        artist       TEXT,
+        album        TEXT,
+        album_artist TEXT,
+        title        TEXT,
+        track        INTEGER,
+        disc         INTEGER,
+        year         TEXT,
+        genre        TEXT,
+        has_cover    INTEGER NOT NULL DEFAULT 0,
+        tags         INTEGER NOT NULL DEFAULT 0,  -- filled tag fields (+1 for cover art): the keeper rule
+        probed_at    REAL NOT NULL,
+        error        TEXT
+    );
+    CREATE INDEX av_music ON av(kind, artist, album);
+    CREATE INDEX av_layout ON av(layout, duration);
+
+    CREATE TRIGGER files_changed_av AFTER UPDATE OF size, mtime_ns, inode, dev ON files
+    BEGIN
+        DELETE FROM av WHERE file_id = NEW.id;
+    END;
+    """,
 ]
 
 DEFAULT_SETTINGS: dict[str, Any] = {
@@ -361,7 +398,11 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "takeout_paths": [],
     # Also open archives found anywhere else in the selected shares.
     "archives_everywhere": False,
-    # Match methods. Exact content is always on.
+    # Milestone 7: scanners an admin can turn off (see scanners.py). With all
+    # of them off, deedup only compares raw file contents.
+    "scanners": {"photo": True, "video": True, "audio": True, "archive": True},
+    # Match methods. Exact content is always on; the next three belong to the
+    # photo scanner and only run while it is on.
     "image_matching": True,   # same photo, different metadata
     "metadata": True,         # read date taken, camera, size, GPS with ExifTool
     "similar_matching": True,  # similar photos: recompressed or resized copies, reviewed by you

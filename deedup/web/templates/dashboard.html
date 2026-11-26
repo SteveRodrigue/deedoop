@@ -9,6 +9,9 @@
 </section>
 {% endif %}
 
+{% if raw_only %}
+<p class="flash ok">Raw content only: every scanner is off on the <a href="/setup#scanners">Setup</a> screen, so deedup finds byte-identical files and nothing else.</p>
+{% endif %}
 <section class="card">
   <h2>Scan</h2>
   {% include "_status.html" %}
@@ -19,10 +22,12 @@
     <div class="muted small">all methods, each copy counted once</div></div>
   <div class="tile"><a href="/duplicates" class="label">Exact copies</a><div class="value">{{ "{:,}".format(stats.groups) }}</div>
     <div class="muted small">groups, {{ stats.wasted | bytes }}</div></div>
-  <div class="tile"><a href="/duplicates?method=image" class="label">Same photo, other metadata</a><div class="value">{{ "{:,}".format(stats.image_groups) }}</div>
-    <div class="muted small">groups, {{ stats.image_wasted | bytes }}</div></div>
+  {% if "image" in methods_on %}<div class="tile"><a href="/duplicates?method=image" class="label">Same photo, other metadata</a><div class="value">{{ "{:,}".format(stats.image_groups) }}</div>
+    <div class="muted small">groups, {{ stats.image_wasted | bytes }}</div></div>{% endif %}
+  {% if "media" in methods_on %}<div class="tile"><a href="/duplicates?method=media" class="label">Same recording, other tags</a><div class="value">{{ "{:,}".format(stats.media_groups) }}</div>
+    <div class="muted small">groups, {{ stats.media_wasted | bytes }}</div></div>{% endif %}
   <div class="tile"><div class="label">Indexed</div><div class="value">{{ "{:,}".format(stats.files) }}</div>
-    <div class="muted small">files, {{ stats.bytes | bytes }}; {{ "{:,}".format(stats.media) }} with metadata</div></div>
+    <div class="muted small">files, {{ stats.bytes | bytes }}; {{ "{:,}".format(stats.media) }} with metadata{% if stats.videos or stats.songs %}, {{ "{:,}".format(stats.videos) }} videos, {{ "{:,}".format(stats.songs) }} songs{% endif %}</div></div>
   {% if stats.similar_groups %}<div class="tile"><a href="/review" class="label">Similar photos</a><div class="value">{{ "{:,}".format(stats.similar_pending) }}</div>
     <div class="muted small">pairs to review; {{ stats.similar_wasted | bytes }} possible, not counted above</div></div>{% endif %}
   {% if stats.archives %}<div class="tile"><a href="/archives" class="label">Archives</a><div class="value">{{ "{:,}".format(stats.archives) }}</div>

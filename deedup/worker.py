@@ -19,7 +19,7 @@ from .benchmark import BenchConfig, disk_paths_for_benchmark, run_benchmark
 from .config import AppConfig
 from .control import Control, Status, Stopped
 from .discovery import list_disks
-from .engine import ScanContext, run_scan
+from .engine import ScanContext, regroup, run_scan
 
 log = logging.getLogger("deedup.worker")
 
@@ -159,6 +159,11 @@ class Worker:
                                                   self.control, self.status))
                 elif job["type"] == "benchmark":
                     result = self._benchmark(conn)
+                elif job["type"] == "regroup":
+                    # A scanner was turned on or off in Setup: rebuild the groups
+                    # from the index without reading any file.
+                    self.status.set(phase="group")
+                    result = regroup(conn, db.get_settings(conn))
                 elif job["type"] in ("action", "undo", "purge"):
                     run = {"action": changes.run_action, "undo": changes.run_undo,
                            "purge": changes.run_purge}[job["type"]]

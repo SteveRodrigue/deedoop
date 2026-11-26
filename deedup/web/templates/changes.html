@@ -30,7 +30,7 @@
     <p id="confirm-delete" hidden><label>Type <strong>DELETE</strong> to confirm <input type="text" name="confirm" autocomplete="off" size="10"></label>
       {% if needs_confirm %}<label>and your password <input type="password" name="password" autocomplete="current-password" maxlength="1024" size="16"></label>{% endif %}</p>
     <p class="muted small">Just before each file, deedup checks it and its kept copy again: both unchanged since the scan, the kept copy
-      still there and not the same file, and for exact copies both are read and hashed again. Anything that fails is skipped.
+      still there and not the same file, and both copies are read again: exact copies must still hash the same, same photos must hold the same image data and same recordings the same audio and video streams (similar photos you checked yourself in Review). Anything that fails is skipped.
       {% if gate.quarantine_days %}Quarantined files are deleted after {{ gate.quarantine_days }} days.{% else %}Quarantined files stay until you empty the quarantine.{% endif %}</p>
     <button {{ "disabled" if not gate.open or active }}>Remove {{ "{:,}".format(summ.files) }} {{ "copy" if summ.files == 1 else "copies" }} ({{ summ.bytes | bytes }})</button>
     {% if active %}<span class="muted small">Wait for the current job to finish.</span>{% endif %}
@@ -45,7 +45,7 @@
   </div>
   {% if summ.files %}
   <p><strong>{{ "{:,}".format(summ.files) }}</strong> {{ "copy" if summ.files == 1 else "copies" }}, <strong>{{ summ.bytes | bytes }}</strong>.
-    <span class="muted small">{% if summ.exact %}{{ "{:,}".format(summ.exact) }} exact copies{% endif %}{% if summ.image %}{{ ", " if summ.exact }}{{ "{:,}".format(summ.image) }} same photo with other metadata{% endif %}{% if summ.similar %}{{ ", " if summ.exact or summ.image }}{{ "{:,}".format(summ.similar) }} similar photos from Review{% endif %}.
+    <span class="muted small">{% if summ.exact %}{{ "{:,}".format(summ.exact) }} exact copies{% endif %}{% if summ.image %}{{ ", " if summ.exact }}{{ "{:,}".format(summ.image) }} same photo with other metadata{% endif %}{% if summ.media %}{{ ", " if summ.exact or summ.image }}{{ "{:,}".format(summ.media) }} same recording with other tags{% endif %}{% if summ.similar %}{{ ", " if summ.exact or summ.image or summ.media }}{{ "{:,}".format(summ.similar) }} similar photos from Review{% endif %}.
     Each one has a copy that is kept, shown under it.</span></p>
   {% else %}
   <p class="muted">Nothing is marked. Choose the copy to keep in <a href="/duplicates">Duplicates</a>, or decide pairs in <a href="/review">Review</a>.</p>
@@ -63,7 +63,7 @@
     <tr>
       <td><div class="path" title="{{ r.path }}"><a href="/file/{{ r.file_id }}">{{ r.user }}</a> <span class="muted small">{{ r.disk }}</span></div>
         <div class="path muted small col-keep" title="{{ r.keep_path }}">keeps <a href="/file/{{ r.keep_id }}">{{ r.keep_user }}</a> · {{ r.keep_disk }}
-          · {{ {"exact": "exact copy", "image": "same photo", "similar": "similar photo"}[r.method] }}</div>
+          · {{ {"exact": "exact copy", "image": "same photo", "media": "same recording", "similar": "similar photo"}.get(r.method, r.method) }}</div>
         {% if not r.ok %}<span class="pill warn">changed since: will be skipped</span>{% endif %}</td>
       <td class="num">{{ r.size | bytes }}</td>
       <td><form method="post" action="/marks/clear">{% include "_csrf.html" %}<input type="hidden" name="file_id" value="{{ r.file_id }}"><button class="secondary small">Keep</button></form></td>

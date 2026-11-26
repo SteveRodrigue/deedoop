@@ -34,5 +34,8 @@ are not optional.
 - `deedup/changes.py` removals and moves (M6); `deedup/safepath.py` the only
   filesystem writes.
 - `deedup/archives.py` + `deedup/limits.py` archive reading.
-- `deedup/metadata.py` ExifTool (the only subprocess).
+- `deedup/metadata.py` ExifTool and `deedup/av.py` ffprobe/ffmpeg (the only subprocesses).
+- `deedup/scanners.py` the scanner registry: photo, video, audio and archive
+  analysis are plugins an admin can turn off. A new kind of analysis is a new
+  `Scanner` row with hooks, never an `if` in the engine.
 - `tests/test_security.py` the security tests, named by rule and finding.

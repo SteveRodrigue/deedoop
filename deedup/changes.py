@@ -58,7 +58,7 @@ ITEM_STATUS = {
     "purged": "Deleted from quarantine",
 }
 KEEPER_RULES = {
-    "suggested": "the suggested copy (highest resolution, largest, earliest)",
+    "suggested": "the suggested copy (photos: highest resolution; music and video: most complete tags)",
     "oldest": "the oldest modified copy",
     "newest": "the newest modified copy",
     "shortest": "the copy with the shortest path",
@@ -102,10 +102,10 @@ def require_open(conn: sqlite3.Connection, mnt: Path) -> None:
 
 MEMBER_SQL = """
     SELECT m.group_id, f.id, f.size, f.mtime_ns, f.dev, f.inode, f.container_id, f.dir, f.name,
-           r.path AS root_path, r.user_path, md.width, md.height, md.taken_at, g.method
+           r.path AS root_path, r.user_path, md.width, md.height, md.taken_at, g.method, av.tags AS tag_count
     FROM group_members m JOIN groups g ON g.id = m.group_id
     JOIN files f ON f.id = m.file_id JOIN roots r ON r.id = f.root_id
-    LEFT JOIN media md ON md.file_id = f.id
+    LEFT JOIN media md ON md.file_id = f.id LEFT JOIN av ON av.file_id = f.id
     WHERE m.group_id IN ({marks}) AND f.state = 'present'
     ORDER BY m.group_id, f.id
 """
@@ -126,7 +126,7 @@ def _user_path(r) -> str:
 
 def pick_keeper(members: list, rule: str, text: str = ""):
     """The copy to keep under one of ``KEEPER_RULES``. Only loose files can be kept."""
-    from .similar import keeper_rank
+    from .queries import suggested_rank as keeper_rank
 
     loose = [m for m in members if not m["container_id"]]
     if not loose:
@@ -269,10 +269,10 @@ def marked(conn: sqlite3.Connection, limit: int = 0, offset: int = 0) -> list[di
 def marks_summary(conn: sqlite3.Connection) -> dict:
     r = conn.execute("""SELECT COUNT(*) AS n, COALESCE(SUM(f.size), 0) AS bytes,
                                SUM(mk.method = 'exact') AS exact, SUM(mk.method = 'image') AS image,
-                               SUM(mk.method = 'similar') AS similar
+                               SUM(mk.method = 'similar') AS similar, SUM(mk.method = 'media') AS media
                         FROM marks mk JOIN files f ON f.id = mk.file_id""").fetchone()
     return {"files": r["n"], "bytes": r["bytes"], "exact": r["exact"] or 0, "image": r["image"] or 0,
-            "similar": r["similar"] or 0}
+            "similar": r["similar"] or 0, "media": r["media"] or 0}
 
 
 def marked_in_groups(conn: sqlite3.Connection, group_ids: list[int]) -> dict[int, set[int]]:
@@ -552,6 +552,18 @@ def _verify_same(item: sqlite3.Row, ctl: Control) -> None:
             raise Skip("could not check the two photos again") from None
         if not ha.get("img_exact") or ha.get("img_exact") != hb.get("img_exact"):
             raise Skip("the two photos no longer have the same image data")
+    elif method == "media":
+        # Milestone 7: both files are read again and must still hold the same
+        # audio and video streams.
+        from .media_index import hash_one
+
+        ka, va = hash_one(item["src_path"], item["size"], item["mtime_ns"])
+        ctl.checkpoint()
+        kb, vb = hash_one(item["keep_path"], item["keep_size"], item["keep_mtime"])
+        if ka != "stream" or kb != "stream":
+            raise Skip("could not check the two recordings again")
+        if va != vb:
+            raise Skip("the two files no longer hold the same recording")
     # similar: you looked at both photos in Review; the checks above (unchanged,
     # kept copy present) still apply.
 
@@ -678,16 +690,9 @@ def _index_stat(conn, file_id: int, path: str) -> None:
 
 
 def _refresh_groups(conn) -> None:
-    from .engine import rebuild_exact_groups, rebuild_image_groups, similar_threshold
-    from .similar import rebuild_similar_groups
+    from .engine import regroup
 
-    s = db.get_settings(conn)
-    min_size = max(1, int(s["min_size"]))
-    rebuild_exact_groups(conn, min_size)
-    if s["image_matching"]:
-        rebuild_image_groups(conn, min_size)
-    if s["similar_matching"]:
-        rebuild_similar_groups(conn, similar_threshold(s))
+    regroup(conn, db.get_settings(conn), pairs=False)
 
 
 def _finish(conn, action_id: int, state: str | None = None) -> dict:

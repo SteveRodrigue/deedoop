@@ -83,7 +83,7 @@
     <label>Exclusions <span class="muted small">one pattern per line, matched against names and share-relative paths (* and ? work)</span>
       <textarea name="exclusions" rows="6">{{ settings.exclusions | join("\n") }}</textarea></label>
     <label>Takeout and archive folders <span class="muted small">one path per line, such as /mnt/user/Backups/Takeout;
-      zip, tar and 7z files there are opened and their contents compared with your disks</span>
+      zip, tar and 7z files there are opened and their contents compared with your disks, while the archive scanner is on</span>
       <textarea name="takeout_paths" rows="6">{{ settings.takeout_paths | join("\n") }}</textarea></label>
   </div>
   <label class="radio"><input type="checkbox" name="archives_everywhere" value="1" {{ "checked" if settings.archives_everywhere }}>
@@ -91,18 +91,44 @@
   <label>Ignore files smaller than <input type="number" name="min_size" min="1" value="{{ settings.min_size }}"> bytes</label>
 </section>
 
-<section class="card" id="methods">
-  <h2>Match methods</h2>
-  <label class="radio"><input type="checkbox" checked disabled> Exact copies <span class="muted small">(always on: same bytes, any file type)</span></label>
-  <label class="radio"><input type="checkbox" name="image_matching" value="1" {{ "checked" if settings.image_matching }}>
-    Same photo, different metadata <span class="muted small">(reads every JPEG, PNG, HEIC, WebP, TIFF once in full)</span></label>
-  <label class="radio"><input type="checkbox" name="metadata" value="1" {{ "checked" if settings.metadata }}>
-    Read photo and video metadata <span class="muted small">(date taken, camera, resolution, GPS; headers only)</span></label>
+<section class="card" id="scanners">
+  <h2>Scanners</h2>
+  <p class="muted">Exact copies are always found, for every file type, by comparing file contents. Each scanner below adds
+    its own understanding of one kind of file. Turn off the ones you don't need: their scan steps are skipped, and their
+    duplicate groups and marks are dropped right away. With every scanner off, deedup compares raw file contents only.</p>
+  {% if raw_only %}<p class="flash ok">Every scanner is off: deedup finds byte-identical files only.</p>{% endif %}
+  <div class="scanners">
+    <div class="scanner on">
+      <label class="radio"><input type="checkbox" checked disabled> <strong>Exact copies</strong> <span class="pill ok">always on</span></label>
+      <p class="muted small">Same bytes, any file type, any name. Quick hash first, BLAKE3 only for likely copies.</p>
+    </div>
+    {% for sc in scanner_rows %}
+    <div class="scanner {{ 'on' if sc.enabled and sc.available }}" id="scanner-{{ sc.key }}">
+      <label class="radio"><input type="checkbox" name="scan_{{ sc.key }}" value="1" {{ "checked" if sc.enabled }}>
+        <strong>{{ sc.label }}</strong>
+        {% if sc.enabled and not sc.available %}<span class="pill warn">needs {{ sc.missing | join(", ") }}</span>
+        {% elif sc.enabled %}<span class="pill ok">on</span>{% else %}<span class="pill">off</span>{% endif %}</label>
+      <p class="small">{{ sc.finds }}</p>
+      <p class="muted small">{{ sc.cost }}</p>
+      {% if sc.enabled and not sc.available %}<p class="flash err small">{{ sc.missing | join(" and ") }} {{ "is" if sc.missing | length == 1 else "are" }} not installed in this container, so this scanner is skipped.</p>{% endif %}
+      {% if sc.key == "photo" %}
+      <div class="sub">
+        <label class="radio"><input type="checkbox" name="image_matching" value="1" {{ "checked" if settings.image_matching }}>
+          Same photo, different metadata <span class="muted small">(reads every JPEG, PNG, HEIC, WebP, TIFF once in full)</span></label>
+        <label class="radio"><input type="checkbox" name="similar_matching" value="1" {{ "checked" if settings.similar_matching }}>
+          Similar photos <span class="muted small">(recompressed or resized copies such as Google “Storage saver”; you review every match)</span></label>
+        <label class="radio">Match closeness <input type="number" name="similar_threshold" min="0" max="10" value="{{ settings.similar_threshold }}" style="width:5em">
+          <span class="muted small">0 to 10, default 8; lower is stricter</span></label>
+      </div>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  <label class="radio" style="margin-top:12px"><input type="checkbox" name="metadata" value="1" {{ "checked" if settings.metadata }}>
+    Read dates, cameras and GPS with ExifTool <span class="muted small">(photos and videos, while their scanner is on; headers only)</span></label>
   {% if not exiftool %}<p class="flash err">ExifTool is not installed in this container, so metadata is skipped.</p>{% endif %}
-  <label class="radio"><input type="checkbox" name="similar_matching" value="1" {{ "checked" if settings.similar_matching }}>
-    Similar photos <span class="muted small">(recompressed or resized copies such as Google “Storage saver”; you review every match)</span></label>
-  <label>Match closeness <input type="number" name="similar_threshold" min="0" max="10" value="{{ settings.similar_threshold }}" style="width:5em">
-    <span class="muted small">0 to 10, default 8; lower is stricter</span></label>
+  <p class="muted small">Turning a scanner on takes effect at the next scan, which reads only the files it needs.</p>
+  <button>Save settings</button>
 </section>
 
 <section class="card" id="disk-mode">

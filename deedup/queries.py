@@ -12,7 +12,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .archives import archive_kind
+from .categories import category
 from .imaging import THUMB_EXTS
+from .scanners import METHOD_LABELS
 
 
 def index_stats(conn: sqlite3.Connection, db_path: Path) -> dict:
@@ -28,6 +30,11 @@ def index_stats(conn: sqlite3.Connection, db_path: Path) -> dict:
     gi = conn.execute(
         "SELECT COUNT(*) AS groups, COALESCE(SUM(wasted), 0) AS wasted FROM groups WHERE method = 'image' AND wasted > 0"
     ).fetchone()
+    gm = conn.execute(
+        "SELECT COUNT(*) AS groups, COALESCE(SUM(wasted), 0) AS wasted FROM groups WHERE method = 'media' AND wasted > 0"
+    ).fetchone()
+    avc = conn.execute("SELECT COALESCE(SUM(kind = 'video'), 0), COALESCE(SUM(kind = 'audio'), 0) FROM av "
+                       "WHERE error IS NULL").fetchone()
     gs = conn.execute(
         "SELECT COUNT(*) AS groups, COALESCE(SUM(wasted), 0) AS wasted, COALESCE(SUM(pending), 0) AS pending "
         "FROM groups WHERE method = 'similar'"
@@ -51,21 +58,23 @@ def index_stats(conn: sqlite3.Connection, db_path: Path) -> dict:
         "dup_files": g["dup_files"], "built_at": g["built_at"], "full_hashed": hashed,
         "errors": errors, "index_bytes": size,
         "image_groups": gi["groups"], "image_wasted": gi["wasted"], "total_wasted": total,
+        "media_groups": gm["groups"], "media_wasted": gm["wasted"], "videos": avc[0], "songs": avc[1],
         "media": media[0], "media_dated": media[1],
         "similar_groups": gs["groups"], "similar_wasted": gs["wasted"], "similar_pending": gs["pending"],
         "archives": arch[0], "archive_members": arch[1], "archive_new": arch[2],
     }
 
 
-# Exact groups that an image group already covers would count the same
-# space twice; the "effective" set keeps image groups and the other exact ones.
+# Exact groups that an image or media group already covers would count the
+# same space twice; the "effective" set keeps image and media groups and the
+# other exact ones.
 EFFECTIVE_GROUPS = """
     SELECT g.* FROM groups g
-    WHERE g.method = 'image'
+    WHERE g.method IN ('image', 'media')
        OR (g.method = 'exact' AND NOT EXISTS (
             SELECT 1 FROM group_members m
             JOIN group_members m2 ON m2.file_id = m.file_id
-            JOIN groups gi ON gi.id = m2.group_id AND gi.method = 'image'
+            JOIN groups gi ON gi.id = m2.group_id AND gi.method IN ('image', 'media')
             WHERE m.group_id = g.id))
 """
 
@@ -94,7 +103,7 @@ def root_counts(conn: sqlite3.Connection) -> dict[int, int]:
     }
 
 
-METHODS = {"exact": "Exact copies", "image": "Same photo, different metadata", "similar": "Similar photos"}
+METHODS = METHOD_LABELS  # every method; scanners.methods(settings) says which are on
 
 # Archive members are shown as "archive path › member path". Members are
 # nested one level at most, so two joins reach the top-level archive.
@@ -193,12 +202,16 @@ def group_members(conn: sqlite3.Connection, group_ids: list[int]) -> dict[int, l
     marks = ",".join("?" * len(group_ids))
     out: dict[int, list[dict]] = {g: [] for g in group_ids}
     rows = conn.execute(
-        f"""SELECT m.group_id, f.id, f.dir, f.name, f.size, f.mtime_ns, f.dev, f.inode, f.nlink, f.ext,
+        f"""SELECT m.group_id, g.method, f.id, f.dir, f.name, f.size, f.mtime_ns, f.dev, f.inode, f.nlink, f.ext,
                    r.disk, r.path AS root_path, r.user_path,
-                   md.taken_at, md.camera, md.width, md.height, md.gps_lat, md.gps_lon, {CONTAINER_COLS},
+                   md.taken_at, md.camera, COALESCE(md.width, av.width) AS width,
+                   COALESCE(md.height, av.height) AS height, md.gps_lat, md.gps_lon, {CONTAINER_COLS},
+                   av.artist, av.album, av.title, av.track, av.year, av.genre, av.has_cover, av.tags AS tag_count,
+                   av.container, av.duration, av.vcodec, av.acodec, av.bitrate,
                    (SELECT value FROM hashes h WHERE h.file_id = f.id AND h.kind = 'blake3') AS full
-            FROM group_members m JOIN files f ON f.id = m.file_id JOIN roots r ON r.id = f.root_id
-            LEFT JOIN media md ON md.file_id = f.id {CONTAINER_JOINS}
+            FROM group_members m JOIN groups g ON g.id = m.group_id
+            JOIN files f ON f.id = m.file_id JOIN roots r ON r.id = f.root_id
+            LEFT JOIN media md ON md.file_id = f.id LEFT JOIN av ON av.file_id = f.id {CONTAINER_JOINS}
             WHERE m.group_id IN ({marks})
             ORDER BY m.group_id, f.container_id != 0, f.size DESC, r.user_path, f.dir, f.name""",
         group_ids,
@@ -224,6 +237,12 @@ def group_members(conn: sqlite3.Connection, group_ids: list[int]) -> dict[int, l
             "dims": f"{r['width']}×{r['height']}" if r["width"] and r["height"] else None,
             "gps": f"{r['gps_lat']:.5f}, {r['gps_lon']:.5f}" if r["gps_lat"] is not None else None,
             "full": r["full"].hex()[:12] if r["full"] else "",
+            "method": r["method"], "tag_count": r["tag_count"] or 0,
+            "artist": r["artist"], "album": r["album"], "title": r["title"], "track": r["track"],
+            "year": r["year"], "genre": r["genre"], "cover": "cover art" if r["has_cover"] else None,
+            "container": container_label(r["container"], r["ext"]),
+            "codecs": " + ".join(c for c in (r["vcodec"], r["acodec"]) if c) or None,
+            "duration": fmt_duration(r["duration"]),
         })
     for members in out.values():
         seen: dict[tuple, int] = {}
@@ -237,13 +256,45 @@ def group_members(conn: sqlite3.Connection, group_ids: list[int]) -> dict[int, l
             m["differs"] = diff
             m["keeper"] = False
         if members:
-            from .similar import keeper_rank
-
-            max(members, key=keeper_rank)["keeper"] = True
+            max(members, key=suggested_rank)["keeper"] = True
     return out
 
 
-DIFF_FIELDS = ("size", "taken_at", "camera", "dims", "gps", "full")
+DIFF_FIELDS = ("size", "taken_at", "camera", "dims", "gps", "full",
+               "artist", "album", "title", "track", "year", "genre", "cover", "container")
+# What a "Same recording, other tags" group shows for each copy.
+MEDIA_FIELDS = (("title", "title"), ("artist", "artist"), ("album", "album"), ("track", "track"),
+                ("year", "year"), ("genre", "genre"), ("cover", "cover art"), ("taken_at", "date"),
+                ("gps", "GPS"), ("container", "container"))
+
+
+def suggested_rank(m) -> tuple:
+    """The suggested keeper. Photos: highest resolution, then largest file.
+    Same recording: most complete tags, then largest file."""
+    if m["method"] == "media":
+        from .media_index import media_rank
+
+        return media_rank(m)
+    from .similar import keeper_rank
+
+    return keeper_rank(m)
+
+
+def container_label(fmt: str | None, ext: str) -> str | None:
+    """ffprobe's 'mov,mp4,m4a,3gp,3g2,mj2' is not helpful: say the file type instead."""
+    if not fmt:
+        return None
+    return {"matroska,webm": "Matroska", "mov,mp4,m4a,3gp,3g2,mj2": "MP4/QuickTime"}.get(fmt, fmt.split(",")[0].upper()) \
+        + f" (.{ext})"
+
+
+def fmt_duration(sec: float | None) -> str | None:
+    if not sec:
+        return None
+    s = int(round(sec))
+    h, rem = divmod(s, 3600)
+    m, s = divmod(rem, 60)
+    return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
 
 
 def same_path_on_two_disks(conn: sqlite3.Connection, limit: int = 500) -> list[sqlite3.Row]:
@@ -351,13 +402,23 @@ class BrowseFilter:
     no_gps: bool = False
     no_date: bool = False
     dups: bool = False
+    artist: str = ""   # milestone 7: music and video
+    album: str = ""
+    codec: str = ""
+    length: str = ""   # a key of LENGTHS
     page: int = 1
     per_page: int = 100
 
     @property
     def flat(self) -> bool:
         """Any filter turns the folder view into a search over the folder's subtree."""
-        return bool(self.q or self.kind or self.year or self.camera or self.no_gps or self.no_date or self.dups)
+        return bool(self.q or self.kind or self.year or self.camera or self.no_gps or self.no_date or self.dups
+                    or self.artist or self.album or self.codec or self.length)
+
+
+# Duration filter: label and range in seconds.
+LENGTHS = {"short": ("under 1 minute", 0, 60), "song": ("1 to 10 minutes", 60, 600),
+           "long": ("10 to 60 minutes", 600, 3600), "film": ("over an hour", 3600, 10**9)}
 
 
 def locations(conn: sqlite3.Connection) -> list[dict]:
@@ -394,7 +455,9 @@ def _subtree(d: str) -> tuple[str, list]:
 
 FILE_COLUMNS = """
     f.id, f.dir, f.name, f.size, f.mtime_ns, f.ext, r.disk, r.user_path, r.path AS root_path, {CONTAINER_COLS},
-    md.taken_at, md.camera, md.width, md.height, md.duration, md.gps_lat, md.gps_lon,
+    md.taken_at, md.camera, COALESCE(md.width, av.width) AS width, COALESCE(md.height, av.height) AS height,
+    COALESCE(av.duration, md.duration) AS duration, md.gps_lat, md.gps_lon,
+    av.artist, av.album, av.title, av.track, av.vcodec, av.acodec, av.kind AS av_kind,
     EXISTS (SELECT 1 FROM group_members gm WHERE gm.file_id = f.id) AS in_group
 """.replace("{CONTAINER_COLS}", CONTAINER_COLS)
 
@@ -431,11 +494,24 @@ def _flat_where(flt: BrowseFilter, roots: list[int]) -> tuple[list[str], list]:
         where.append("md.file_id IS NOT NULL AND md.taken_at IS NULL")
     if flt.dups:
         where.append("EXISTS (SELECT 1 FROM group_members gm WHERE gm.file_id = f.id)")
+    if flt.artist:
+        where.append("(av.artist = ? OR av.album_artist = ?)")
+        args += [flt.artist, flt.artist]
+    if flt.album:
+        where.append("av.album = ?")
+        args.append(flt.album)
+    if flt.codec:
+        where.append("(av.vcodec = ? OR av.acodec = ?)")
+        args += [flt.codec, flt.codec]
+    if flt.length in LENGTHS:
+        _label, lo, hi = LENGTHS[flt.length]
+        where.append("COALESCE(av.duration, md.duration) >= ? AND COALESCE(av.duration, md.duration) < ?")
+        args += [lo, hi]
     return where, args
 
 
 BROWSE_JOINS = ("FROM files f JOIN roots r ON r.id = f.root_id LEFT JOIN media md ON md.file_id = f.id "
-                + CONTAINER_JOINS)
+                "LEFT JOIN av ON av.file_id = f.id " + CONTAINER_JOINS)
 
 
 def selection(conn: sqlite3.Connection, flt: BrowseFilter, limit: int = 0) -> list[sqlite3.Row]:
@@ -478,7 +554,7 @@ def browse(conn: sqlite3.Connection, flt: BrowseFilter) -> dict:
     else:
         where, args = _flat_where(flt, roots)
     w = " AND ".join(where)
-    joins = f"FROM files f JOIN roots r ON r.id = f.root_id LEFT JOIN media md ON md.file_id = f.id {CONTAINER_JOINS}"
+    joins = BROWSE_JOINS
     total = conn.execute(f"SELECT COUNT(*) {joins} WHERE {w}", args).fetchone()[0]
     order = "md.taken_at IS NULL, md.taken_at, f.dir, f.name" if flt.year or flt.camera else "f.dir, f.name"
     files = conn.execute(
@@ -495,7 +571,10 @@ def _file_view(r: sqlite3.Row) -> dict:
         "disk": r["disk"], "user_path": f"{r['user_path']}/{rel}", "path": f"{r['root_path']}/{rel}",
         "thumb": can_thumb(r), "container_id": r["container_id"], "taken_at": r["taken_at"], "camera": r["camera"],
         "dims": f"{r['width']}×{r['height']}" if r["width"] and r["height"] else None,
-        "duration": r["duration"], "gps": r["gps_lat"] is not None, "in_group": bool(r["in_group"]),
+        "duration": r["duration"], "length": fmt_duration(r["duration"]), "gps": r["gps_lat"] is not None,
+        "in_group": bool(r["in_group"]), "artist": r["artist"], "album": r["album"], "title": r["title"],
+        "track": r["track"], "codecs": " + ".join(c for c in (r["vcodec"], r["acodec"]) if c) or None,
+        "av_kind": r["av_kind"], "playable": r["container_id"] == 0 and category(r["ext"]) in ("audio", "video"),
     }
 
 
@@ -504,22 +583,31 @@ def facets(conn: sqlite3.Connection) -> dict:
         "SELECT DISTINCT substr(taken_at, 1, 4) FROM media WHERE taken_at IS NOT NULL ORDER BY 1 DESC")]
     cameras = [r[0] for r in conn.execute(
         "SELECT camera FROM media WHERE camera IS NOT NULL GROUP BY camera ORDER BY COUNT(*) DESC LIMIT 200")]
-    return {"years": years, "cameras": cameras}
+    artists = [r[0] for r in conn.execute(
+        "SELECT COALESCE(album_artist, artist) AS a FROM av WHERE a IS NOT NULL GROUP BY a ORDER BY a COLLATE NOCASE "
+        "LIMIT 500")]
+    codecs = [r[0] for r in conn.execute(
+        "SELECT c FROM (SELECT vcodec AS c FROM av UNION ALL SELECT acodec FROM av) WHERE c IS NOT NULL "
+        "GROUP BY c ORDER BY COUNT(*) DESC LIMIT 50")]
+    return {"years": years, "cameras": cameras, "artists": artists, "codecs": codecs, "lengths": LENGTHS}
 
 
 def file_detail(conn: sqlite3.Connection, file_id: int) -> dict | None:
     r = conn.execute(
         f"SELECT {FILE_COLUMNS}, f.inode, f.nlink, f.error, md.mime, md.orientation "
-        f"FROM files f JOIN roots r ON r.id = f.root_id LEFT JOIN media md ON md.file_id = f.id {CONTAINER_JOINS} "
-        "WHERE f.id = ?",
+        f"{BROWSE_JOINS} WHERE f.id = ?",
         (file_id,),
     ).fetchone()
     if r is None:
         return None
     v = _file_view(r)
+    a = conn.execute("SELECT * FROM av WHERE file_id = ?", (file_id,)).fetchone()
+    v["av"] = dict(a) if a else None
+    if a:
+        v["av"]["container_label"] = container_label(a["container"], r["ext"])
     v.update({"inode": r["inode"], "nlink": r["nlink"], "error": r["error"], "mime": r["mime"],
               "orientation": r["orientation"], "gps_lat": r["gps_lat"], "gps_lon": r["gps_lon"]})
-    v["hashes"] = {h["kind"]: (h["value"].hex() if h["kind"] not in ("img_none", "sim_none", "json_none") else h["value"].decode(errors="replace"))
+    v["hashes"] = {h["kind"]: (h["value"].hex() if h["kind"] not in ("img_none", "sim_none", "json_none", "stream_none") else h["value"].decode(errors="replace"))
                    for h in conn.execute("SELECT kind, value FROM hashes WHERE file_id = ?", (file_id,))}
     v["groups"] = [dict(g) for g in conn.execute(
         "SELECT g.id, g.method, g.copies, g.wasted FROM group_members m JOIN groups g ON g.id = m.group_id "
@@ -665,8 +753,7 @@ def albums(members: list[dict]) -> list[dict]:
 
 def _photo(conn: sqlite3.Connection, file_id: int) -> dict | None:
     r = conn.execute(
-        f"SELECT {FILE_COLUMNS}, f.nlink, sj.taken_at AS json_taken "
-        f"FROM files f JOIN roots r ON r.id = f.root_id LEFT JOIN media md ON md.file_id = f.id {CONTAINER_JOINS} "
+        f"SELECT {FILE_COLUMNS}, f.nlink, sj.taken_at AS json_taken {BROWSE_JOINS} "
         "LEFT JOIN sidecars sc ON sc.file_id = f.id LEFT JOIN sidecar_json sj ON sj.file_id = sc.json_file_id "
         "WHERE f.id = ?",
         (file_id,),
@@ -727,3 +814,39 @@ def similar_for_file(conn: sqlite3.Connection, file_id: int, threshold: int) -> 
             p["pdist"] = r["pdist"]
             out.append(p)
     return out
+
+
+# -- music (milestone 7) -------------------------------------------------------------
+
+
+def music(conn: sqlite3.Connection, flt: BrowseFilter) -> dict:
+    """The music view of a folder and everything below it: artists, or the
+    albums and tracks of one artist."""
+    roots, base = loc_roots(conn, flt.loc)
+    if not roots:
+        return {"artists": [], "albums": [], "base": ""}
+    sub, sargs = _subtree(flt.dir)
+    rmarks = ",".join("?" * len(roots))
+    where = (f"f.root_id IN ({rmarks}) AND f.state = 'present' AND f.container_id = 0 AND {sub} "
+             "AND av.kind = 'audio' AND av.error IS NULL")
+    args = roots + sargs
+    if not flt.artist:
+        artists = conn.execute(
+            f"""SELECT COALESCE(av.album_artist, av.artist, '') AS name, COUNT(*) AS tracks,
+                       COUNT(DISTINCT av.album) AS albums, SUM(f.size) AS bytes, SUM(av.duration) AS seconds,
+                       SUM(EXISTS (SELECT 1 FROM group_members gm WHERE gm.file_id = f.id)) AS dups
+                FROM files f JOIN av ON av.file_id = f.id WHERE {where}
+                GROUP BY name ORDER BY name = '', name COLLATE NOCASE""",
+            args).fetchall()
+        return {"artists": [dict(r) for r in artists], "albums": [], "base": base}
+    rows = conn.execute(
+        f"SELECT {FILE_COLUMNS}, av.disc, av.year, av.album_artist {BROWSE_JOINS} WHERE {where} "
+        "AND COALESCE(av.album_artist, av.artist, '') = ? "
+        "ORDER BY av.album IS NULL, av.album COLLATE NOCASE, av.disc, av.track, f.name LIMIT 5000",
+        args + [flt.artist if flt.artist != "(no artist)" else ""]).fetchall()
+    albums: dict[str, dict] = {}
+    for r in rows:
+        a = albums.setdefault(r["album"] or "", {"name": r["album"] or "", "year": r["year"], "tracks": []})
+        a["year"] = a["year"] or r["year"]
+        a["tracks"].append(_file_view(r))
+    return {"artists": [], "albums": list(albums.values()), "base": base}

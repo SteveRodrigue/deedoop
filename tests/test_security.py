@@ -504,3 +504,52 @@ def test_no_extractall():
     src = Path(__file__).parent.parent / "deedup"
     for f in src.rglob("*.py"):
         assert "extractall" not in f.read_text(), f
+
+
+# -- SC3: ffprobe and ffmpeg (milestone 7) ---------------------------------------------------
+
+
+def test_safe_for_ffmpeg():
+    from deedup.av import safe_for_ffmpeg
+
+    assert safe_for_ffmpeg("/mnt/disk1/Music/AC:DC - Back in Black.mp3")
+    assert safe_for_ffmpeg("/mnt/disk1/Music/-i.mp3")
+    for bad in ("song.mp3", "concat:/a.mp3|/b.mp3", "-i", "/mnt/a\n.mp3", "/mnt/a\r.mp3", "/mnt/\x00.mp3"):
+        assert not safe_for_ffmpeg(bad), repr(bad)
+
+
+def test_a_file_name_cannot_add_ffmpeg_options(monkeypatch):
+    """SC3: a name with a line break is never handed to ffprobe or ffmpeg."""
+    import subprocess
+
+    from deedup import av
+
+    def boom(*a, **kw):
+        raise AssertionError("a subprocess was started for an unsafe name")
+
+    monkeypatch.setattr(subprocess, "run", boom)
+    assert av.probe("/mnt/disk1/x\n-y\n.mp3").error == av.UNSAFE_NAME
+    with pytest.raises(ValueError):
+        av.stream_hash("/mnt/disk1/x\n.mp3", 10)
+
+
+@pytest.mark.skipif(not __import__("deedup.av").av.tools_available(), reason="ffmpeg not installed")
+def test_a_crafted_media_file_cannot_open_other_files(tmp_path):
+    """SC3: a playlist in the backups must not make ffmpeg read another file
+    (or a URL). Without -format_whitelist, ffmpeg opens the HLS playlist and
+    hashes the file it points to."""
+    import subprocess
+
+    from deedup import av
+
+    secret = tmp_path / "secret.mp3"
+    subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-f", "lavfi", "-i", "sine=d=1", str(secret)], check=True)
+    playlist = tmp_path / "evil.m3u8"
+    playlist.write_text(f"#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXTINF:1,\nfile://{secret}\n#EXT-X-ENDLIST\n")
+    with pytest.raises(RuntimeError):
+        av.stream_hash(str(playlist), playlist.stat().st_size)
+    assert av.probe(str(playlist)).error
+    concat = tmp_path / "list.mp4"
+    concat.write_text(f"ffconcat version 1.0\nfile '{secret}'\n")
+    with pytest.raises(RuntimeError):
+        av.stream_hash(str(concat), concat.stat().st_size)
