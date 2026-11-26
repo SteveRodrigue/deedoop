@@ -390,6 +390,28 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX scan_log_job ON scan_log(job_id, id);
     """,
+    # v10: milestone 8, re-encoded songs and videos (fingerprints go in hashes:
+    # afp, vfp, and mkey, the key decisions are stored against)
+    """
+    CREATE TABLE media_pairs (
+        a       INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+        b       INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+        kind    TEXT NOT NULL,            -- audio or video
+        score   REAL NOT NULL,            -- share of fingerprint bits (audio) or frames (video) that agree
+        offset  REAL NOT NULL DEFAULT 0,  -- seconds b is shifted against a
+        PRIMARY KEY (a, b)
+    ) WITHOUT ROWID;
+    CREATE INDEX media_pairs_b ON media_pairs(b);
+
+    CREATE TABLE media_reviews (
+        key_a       BLOB NOT NULL,
+        key_b       BLOB NOT NULL,
+        decision    TEXT NOT NULL,        -- keep_a, keep_b, both, not_dup, later
+        keep        BLOB,                 -- key of the copy to keep
+        decided_at  REAL NOT NULL,
+        PRIMARY KEY (key_a, key_b)
+    ) WITHOUT ROWID;
+    """,
 ]
 
 DEFAULT_SETTINGS: dict[str, Any] = {
@@ -417,7 +439,8 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "image_matching": True,   # same photo, different metadata
     "metadata": True,         # read date taken, camera, size, GPS with ExifTool
     "similar_matching": True,  # similar photos: recompressed or resized copies, reviewed by you
-    "similar_threshold": 8,    # largest pHash distance (0-10) shown as similar
+    "similar_threshold": 8,
+    "similar_media": True,     # re-encoded songs and videos (fingerprints), reviewed by you    # largest pHash distance (0-10) shown as similar
     # Files smaller than this are ignored by the duplicate finder.
     "min_size": 1,
     # 'single': one disk at a time. 'parallel': up to parallel_disks at once.

@@ -8,6 +8,12 @@ Two commands, both run without a shell and with a fixed argument list (SC3):
   audio and video stream, leaving out tags, cover art, chapters and the
   container. Two files with the same stream hash are the same recording,
   even when one was retagged or remuxed from MKV to MP4.
+* ``ffmpeg -f chromaprint`` (milestone 8) decodes the first two minutes of a
+  song into its Chromaprint fingerprint, the one AcoustID uses, which
+  survives re-encoding. It is ffmpeg's own Chromaprint muxer, so no other
+  program is needed.
+* ``ffmpeg -ss <t> -frames:v 1`` (milestone 8) decodes one frame, as a
+  32x32 greyscale image for the video fingerprint or a JPEG poster.
 
 A crafted media file must not make ffmpeg read anything else, so both
 commands only open local files (``-protocol_whitelist file``) and only with
@@ -52,6 +58,21 @@ UNSAFE_NAME = "name not readable by ffmpeg (it contains a line break or control 
 
 def tools_available() -> bool:
     return shutil.which("ffprobe") is not None and shutil.which("ffmpeg") is not None
+
+
+_chromaprint: bool | None = None
+
+
+def chromaprint_available() -> bool:
+    """Whether this ffmpeg was built with the Chromaprint muxer (Debian's is)."""
+    global _chromaprint
+    if _chromaprint is None:
+        try:
+            out = _run(["ffmpeg", "-hide_banner", "-muxers"], PROBE_TIMEOUT)
+            _chromaprint = any(line.split()[1:2] == ["chromaprint"] for line in out.decode(errors="replace").splitlines())
+        except (OSError, RuntimeError, subprocess.TimeoutExpired):
+            _chromaprint = False
+    return _chromaprint
 
 
 def safe_for_ffmpeg(path: str) -> bool:
@@ -199,6 +220,53 @@ def probe(path: str) -> Probe:
         return Probe(error="ffprobe took too long")
     except (RuntimeError, ValueError, OSError) as e:
         return Probe(error=f"ffprobe: {e}"[:300])
+
+
+AUDIO_FP_SECONDS = 120     # the first two minutes, like AcoustID
+FP_TIMEOUT = 60
+FRAME = 32                 # video fingerprint frames are FRAME x FRAME greyscale
+
+
+def audio_fingerprint(path: str) -> bytes:
+    """The raw Chromaprint fingerprint (little-endian 32-bit words, about 8
+    per second) of the first audio stream's first two minutes."""
+    args = ["ffmpeg", "-nostdin", "-v", "error", "-hide_banner", *_input_args(path),
+            "-map", "0:a:0", "-t", str(AUDIO_FP_SECONDS), "-f", "chromaprint", "-fp_format", "raw", "-"]
+    try:
+        out = _run(args, FP_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("ffmpeg took too long") from None
+    if len(out) < 4 * 16:
+        raise RuntimeError("too little sound to fingerprint")
+    return out[: len(out) - len(out) % 4]
+
+
+def _seek(t: float) -> list[str]:
+    return ["-ss", f"{max(0.0, t):.3f}"]
+
+
+def video_frame(path: str, t: float) -> bytes:
+    """One frame near ``t`` seconds as FRAME x FRAME greyscale bytes (empty if
+    there is no frame there)."""
+    args = ["ffmpeg", "-nostdin", "-v", "error", "-hide_banner", *_seek(t), *_input_args(path),
+            "-map", "0:V:0", "-frames:v", "1", "-vf", f"scale={FRAME}:{FRAME}:flags=area,format=gray",
+            "-f", "rawvideo", "-"]
+    try:
+        out = _run(args, FP_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("ffmpeg took too long") from None
+    return out[: FRAME * FRAME] if len(out) >= FRAME * FRAME else b""
+
+
+def poster(path: str, t: float, width: int = 640) -> bytes:
+    """A JPEG of the frame near ``t`` seconds, ``width`` pixels wide."""
+    args = ["ffmpeg", "-nostdin", "-v", "error", "-hide_banner", *_seek(t), *_input_args(path),
+            "-map", "0:V:0", "-frames:v", "1", "-vf", f"scale={int(width)}:-2", "-q:v", "4",
+            "-f", "image2pipe", "-c:v", "mjpeg", "-"]
+    try:
+        return _run(args, FP_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("ffmpeg took too long") from None
 
 
 def stream_hash(path: str, size: int) -> bytes:

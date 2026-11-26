@@ -46,6 +46,12 @@
     <span class="muted small">Recompressed or resized copies. These are suggestions: check them in the <a href="/review">review queue</a>;
     they are not counted in the dashboard total. The suggested keeper has the highest resolution, then the largest file.</span></p>
   {% if not method_on %}<p class="flash err">Similar photos are turned off on the <a href="/setup#scanners">Setup</a> screen.</p>{% endif %}
+  {% elif flt.method == "media_similar" %}
+  <p><strong>{{ "{:,}".format(total) }}</strong> groups of re-encoded songs and videos, <strong>{{ wasted | bytes }}</strong> possibly reclaimable.
+    <span class="muted small">The same song or video at another quality or size: a FLAC and its MP3, a phone video and the copy a
+    messaging app made. These are suggestions: listen to or watch them in the <a href="/review?kind=media">review queue</a>; they are
+    not counted in the dashboard total. The suggested keeper is lossless, then the highest resolution or bitrate, then the longest.</span></p>
+  {% if not method_on %}<p class="flash err">Re-encoded songs and videos are turned off on the <a href="/setup#scanners">Setup</a> screen.</p>{% endif %}
   {% elif flt.method == "media" %}
   <p><strong>{{ "{:,}".format(total) }}</strong> songs and videos stored more than once with other tags, <strong>{{ wasted | bytes }}</strong> reclaimable.
     <span class="muted small">The audio and video streams are bit-for-bit identical; only tags, cover art, dates or the container
@@ -57,7 +63,7 @@
     Highlighted fields differ between copies. Reclaimable space keeps the largest copy, which usually has the most metadata.</span></p>
   {% if not method_on %}<p class="flash err">Photo matching is turned off on the <a href="/setup#scanners">Setup</a> screen.</p>{% endif %}
   {% endif %}
-  {% if total and flt.method != "similar" %}
+  {% if total and flt.method not in ("similar", "media_similar") %}
   <form method="post" action="/marks/bulk" class="row bulk">{% include "_csrf.html" %}
     <input type="hidden" name="method" value="{{ flt.method }}"><input type="hidden" name="category" value="{{ flt.category }}">
     <input type="hidden" name="q" value="{{ flt.q }}"><input type="hidden" name="min_mb" value="{{ min_mb }}">
@@ -80,19 +86,21 @@
 {% for m in ms if not m.in_archive and ns.keep is none %}{% if gm and m.file_id not in gm %}{% set ns.keep = m.file_id %}{% endif %}{% endfor %}
 {% if ns.keep is none %}{% for m in ms if m.keeper and not m.in_archive %}{% set ns.keep = m.file_id %}{% endfor %}{% endif %}
 {% if ns.keep is none %}{% for m in ms if not m.in_archive and ns.keep is none %}{% set ns.keep = m.file_id %}{% endfor %}{% endif %}
-<details class="group card" {{ "open" if loop.index <= (6 if photo_grid or flt.method == "media" else 3) }}>
+{% set media_grid = flt.method in ("media", "media_similar") %}
+<details class="group card" {{ "open" if loop.index <= (6 if photo_grid or media_grid else 3) }}>
   <summary>
     <span class="wasted">{{ g.wasted | bytes }}</span>
     <span>{{ g.copies }} copies{% if flt.method == "exact" %} of {{ g.size | bytes }}{% endif %}</span>
     <span class="pill">{{ g.category }}</span>
     {% if flt.method == "similar" %}{% if g.pending %}<a class="pill warn" href="/review">{{ g.pending }} to review</a>{% else %}<span class="pill ok">reviewed</span>{% endif %}{% endif %}
+    {% if flt.method == "media_similar" %}{% if g.pending %}<a class="pill warn" href="/review?kind=media">{{ g.pending }} to review</a>{% else %}<span class="pill ok">reviewed</span>{% endif %}{% endif %}
     {% if gm %}<span class="pill warn">{{ gm | length }} marked</span>{% endif %}
     <span class="path muted" title="{{ ms[0].user_path }}">{{ ms[0].user_path }}</span>
   </summary>
   <form id="keep-{{ g.id }}" method="post" action="/marks/group">{% include "_csrf.html" %}<input type="hidden" name="group_id" value="{{ g.id }}">
     <input type="hidden" name="back" value="{{ back }}"></form>
   <form id="clear-{{ g.id }}" method="post" action="/marks/group/{{ g.id }}/clear">{% include "_csrf.html" %}<input type="hidden" name="back" value="{{ back }}"></form>
-  {% if flt.method == "media" %}
+  {% if media_grid %}
   <div class="media-grid">
     {% for m in ms %}
     <div class="media-copy {{ 'keeper' if m.keeper }}">
@@ -106,7 +114,12 @@
       </div>
       <dl class="kv">
         <dt>Size</dt><dd><span class="{{ 'differs' if 'size' in m.differs }}">{{ m.size | bytes }}</span></dd>
-        {% if m.duration %}<dt>Length</dt><dd>{{ m.duration }}{% if m.codecs %} · {{ m.codecs }}{% endif %}{% if m.dims %} · {{ m.dims }}{% endif %}</dd>{% endif %}
+        {% if flt.method == "media_similar" %}
+        <dt>Length</dt><dd><span class="{{ 'differs' if 'duration' in m.differs }}">{{ m.duration or "unknown" }}</span></dd>
+        <dt>Codec</dt><dd><span class="{{ 'differs' if 'codecs' in m.differs }}">{{ m.codecs or "unknown" }}</span></dd>
+        <dt>Bitrate</dt><dd><span class="{{ 'differs' if 'kbps' in m.differs }}">{{ m.kbps or "unknown" }}</span></dd>
+        {% if m.dims %}<dt>Resolution</dt><dd><span class="{{ 'differs' if 'dims' in m.differs }}">{{ m.dims }}</span></dd>{% endif %}
+        {% elif m.duration %}<dt>Length</dt><dd>{{ m.duration }}{% if m.codecs %} · {{ m.codecs }}{% endif %}{% if m.dims %} · {{ m.dims }}{% endif %}</dd>{% endif %}
         {% for key, label in media_fields %}{% set v = m[key] %}
         {% if v or key in m.differs %}<dt>{{ label | capitalize }}</dt><dd><span class="{{ 'differs' if key in m.differs }}">{{ v if v else "none" }}</span></dd>{% endif %}
         {% endfor %}
@@ -116,7 +129,8 @@
     </div>
     {% endfor %}
   </div>
-  <div class="muted small" style="margin-top:6px">Stream hash {{ g.key[:16] }}…</div>
+  {% if flt.method == "media" %}<div class="muted small" style="margin-top:6px">Stream hash {{ g.key[:16] }}…</div>
+  {% else %}<div class="muted small" style="margin-top:6px">Best match {{ g.score }}%</div>{% endif %}
   {% elif photo_grid %}
   <div class="photos" style="margin-top:10px">
     {% for m in ms %}

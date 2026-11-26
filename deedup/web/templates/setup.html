@@ -124,7 +124,11 @@
     </div>
     {% endfor %}
   </div>
-  <label class="radio" style="margin-top:12px"><input type="checkbox" name="metadata" value="1" {{ "checked" if settings.metadata }}>
+  <label class="radio" style="margin-top:12px"><input type="checkbox" name="similar_media" value="1" {{ "checked" if settings.similar_media }}>
+    Re-encoded songs and videos <span class="muted small">(with the Videos or Music scanner on: a fingerprint of the first two minutes
+    of each song, 12 frames of each video; you review every match)</span></label>
+  {% if settings.similar_media and not chromaprint %}<p class="flash err small">This ffmpeg has no Chromaprint support, so songs are not fingerprinted; videos still are.</p>{% endif %}
+  <label class="radio"><input type="checkbox" name="metadata" value="1" {{ "checked" if settings.metadata }}>
     Read dates, cameras and GPS with ExifTool <span class="muted small">(photos and videos, while their scanner is on; headers only)</span></label>
   {% if not exiftool %}<p class="flash err">ExifTool is not installed in this container, so metadata is skipped.</p>{% endif %}
   <p class="muted small">Turning a scanner on takes effect at the next scan, which reads only the files it needs.</p>

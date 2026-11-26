@@ -54,7 +54,8 @@ os.rename(src, dst)                   # wrong: follows symlinks, overwrites
 ### SC3 No shell, and checked arguments
 
 Subprocesses run in two modules only: ExifTool in `metadata.py`, and ffprobe
-and ffmpeg in `av.py` (milestone 7). Arguments are a list of fixed options
+and ffmpeg in `av.py` (milestones 7 and 8: probe, stream hash, Chromaprint
+fingerprint, video frames and posters). Arguments are a list of fixed options
 plus paths that passed `safe_for_exiftool()` or `safe_for_ffmpeg()`
 (absolute, no line breaks or control characters). Never `shell=True`, never
 `os.system`.
@@ -69,7 +70,8 @@ has a time limit.
 *Checked by:* ruff `S6xx` rules and `TID251` (`subprocess`, `os.system`,
 `os.popen` banned outside `metadata.py` and `av.py`);
 `test_a_file_name_cannot_add_exiftool_options`, `test_a_file_name_cannot_add_ffmpeg_options`,
-`test_a_crafted_media_file_cannot_open_other_files`.
+`test_a_crafted_media_file_cannot_open_other_files`,
+`test_m8_fingerprints_and_posters_cannot_open_other_files`.
 
 ### SC4 Archives are read, never extracted
 

@@ -77,7 +77,8 @@ smoke() {
   local probe='import urllib.request as u, urllib.error as e
 base = "http://127.0.0.1:8080"
 for p in ("/healthz", "/login", "/", "/setup", "/duplicates", "/browse", "/review", "/archives", "/reorganize",
-          "/plans", "/changes", "/same-path", "/browse?view=music", "/duplicates?method=media", "/log"):
+          "/plans", "/changes", "/same-path", "/browse?view=music", "/duplicates?method=media", "/log",
+          "/review?kind=media", "/duplicates?method=media_similar"):
     r = u.urlopen(base + p, timeout=4)
     assert r.status == 200, p
     print("  ok", p, "->", r.url.replace(base, ""))

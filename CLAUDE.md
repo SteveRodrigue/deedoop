@@ -35,6 +35,8 @@ are not optional.
   filesystem writes.
 - `deedup/archives.py` + `deedup/limits.py` archive reading.
 - `deedup/metadata.py` ExifTool and `deedup/av.py` ffprobe/ffmpeg (the only subprocesses).
+- `deedup/media_similar.py` re-encoded songs and videos (M8): fingerprints,
+  pairs, review decisions.
 - `deedup/tls.py` built-in HTTPS (your certificate or a self-signed one);
   `deedup/control.py` progress, ETA and the scan log lines.
 - `deedup/scanners.py` the scanner registry: photo, video, audio and archive

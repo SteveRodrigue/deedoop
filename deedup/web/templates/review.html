@@ -19,6 +19,10 @@
 </div>
 {% endmacro %}
 {% block content %}
+<nav class="tabs kinds">
+  <a href="/review" class="on">Photos <span class="count">{{ "{:,}".format(counts.open) }}</span></a>
+  <a href="/review?kind=media">Songs and videos <span class="count">{{ "{:,}".format(media_counts.open) }}</span></a>
+</nav>
 <nav class="tabs">
   <a href="/review" class="{{ 'on' if view == 'queue' }}">To review <span class="count">{{ "{:,}".format(counts.open) }}</span></a>
   <a href="/review?view=decided" class="{{ 'on' if view == 'decided' }}">Reviewed <span class="count">{{ "{:,}".format(counts.decided) }}</span></a>

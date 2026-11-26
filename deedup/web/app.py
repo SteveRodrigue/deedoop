@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from .. import __version__, auth, changes, db, plans, queries, scanners, similar
+from .. import __version__, auth, av, changes, db, media_similar, plans, queries, scanners, similar
 from ..archive_index import refresh_coverage
 from ..archives import read_member_bytes
 from ..categories import CATEGORIES
@@ -355,6 +355,7 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
                           bench=json.loads(bench["result"]) if bench else None, error=error, saved=saved,
                           mnt=str(cfg.mnt), exiftool=exiftool_available(), gate=changes.gate(c, cfg.mnt),
                           scanner_rows=scanners.status(settings), raw_only=scanners.raw_only(settings),
+                          chromaprint=av.tools_available() and av.chromaprint_available(),
                           tls=tls_info or TlsInfo(), request_https=network.is_https(request),
                           renew_days=RENEW_DAYS, events=auth.recent_events(c) if request.state.session else [], **job_view(c))
         finally:
@@ -412,6 +413,7 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
         archives_everywhere: str = Form(""),
         similar_matching: str = Form(""),
         similar_threshold: int = Form(similar.DEFAULT_THRESHOLD),
+        similar_media: str = Form(""),
         scan_photo: str = Form(""),
         scan_video: str = Form(""),
         scan_audio: str = Form(""),
@@ -445,6 +447,7 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
                 "archives_everywhere": bool(archives_everywhere),
                 "similar_matching": bool(similar_matching),
                 "similar_threshold": max(0, min(similar_threshold, similar.MAX_DISTANCE)),
+                "similar_media": bool(similar_media),
             })
             after = db.get_settings(c)
             # A scanner or method turned off: drop its groups and marks now, without
@@ -632,19 +635,86 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
                             content_disposition_type="inline")
 
     @app.get("/review", response_class=HTMLResponse)
-    def review(request: Request, view: str = "queue", done: str = ""):
+    def review(request: Request, view: str = "queue", done: str = "", kind: str = "photos"):
         c = conn()
         try:
             s = db.get_settings(c)
             t = threshold_of(s)
             decided = view == "decided"
+            media_counts = media_similar.counts(c)
+            if kind == "media":
+                pairs = [p for p in (queries.media_pair_view(c, r) for r in media_similar.queue(
+                    c, decided=decided, limit=100 if decided else 2)) if p]
+                for p in pairs:
+                    for side in (p["a"], p["b"]):
+                        side["play"] = side["ext"] in PLAYABLE
+                return render(request, "review_media.html", pairs=pairs, view="decided" if decided else "queue",
+                              counts=media_counts, photo_counts=similar.counts(c, t), settings=s,
+                              decisions=media_similar.DECISIONS, done=done,
+                              media_on="media_similar" in scanners.methods(s))
             pairs = [p for p in (queries.pair_view(c, r) for r in similar.queue(c, t, decided=decided,
                                                                                   limit=100 if decided else 2)) if p]
             return render(request, "review.html", pairs=pairs, view="decided" if decided else "queue",
                           counts=similar.counts(c, t), threshold=t, settings=s, decisions=similar.DECISIONS,
-                          done=done, max_distance=similar.MAX_DISTANCE)
+                          done=done, max_distance=similar.MAX_DISTANCE, media_counts=media_counts)
         finally:
             c.close()
+
+    @app.post("/review/media/decide")
+    def review_media_decide(a: int = Form(...), b: int = Form(...), decision: str = Form(...)):
+        c = conn()
+        try:
+            ok = media_similar.decide(c, a, b, decision)
+            if ok and decision != "later":
+                media_similar.rebuild_groups(c)
+        finally:
+            c.close()
+        return RedirectResponse(f"/review?kind=media&done={_q(decision) if ok else ''}", status_code=303)
+
+    @app.post("/review/media/undo")
+    def review_media_undo(a: int = Form(...), b: int = Form(...)):
+        c = conn()
+        try:
+            media_similar.undo(c, a, b)
+            media_similar.rebuild_groups(c)
+        finally:
+            c.close()
+        return RedirectResponse("/review?kind=media&view=decided", status_code=303)
+
+    @app.get("/poster/{file_id}")
+    def poster(file_id: int):
+        """A frame from the middle of a video, for the review queue (milestone 8).
+        Read-only; made once with ffmpeg and cached like thumbnails (SC1, SC3)."""
+        c = conn()
+        try:
+            r = c.execute("SELECT f.dir, f.name, f.size, f.mtime_ns, f.container_id, f.state, r.path, av.duration "
+                          "FROM files f JOIN roots r ON r.id = f.root_id JOIN av ON av.file_id = f.id "
+                          "WHERE f.id = ? AND r.enabled = 1 AND av.kind = 'video' AND av.error IS NULL",
+                          (file_id,)).fetchone()
+        finally:
+            c.close()
+        if r is None or r["container_id"] or r["state"] != "present":
+            return Response(status_code=404)
+        folder = cfg.config_dir / "thumbs" / "poster" / f"{file_id % 256:02x}"
+        dest = folder / f"{file_id}-{r['mtime_ns']}-{r['size']}.jpg"
+        if not dest.exists():
+            path = Path(r["path"]) / r["dir"] / r["name"]
+            try:
+                st = path.lstat()
+                if path.is_symlink() or (st.st_size, st.st_mtime_ns) != (r["size"], r["mtime_ns"]):
+                    return Response(status_code=404)
+                data = av.poster(str(path), (r["duration"] or 0) / 2)
+            except (OSError, RuntimeError, ValueError):
+                return Response(PLACEHOLDER_SVG, media_type="image/svg+xml", headers={"Cache-Control": "max-age=300"})
+            if not data.startswith(b"\xff\xd8"):
+                return Response(PLACEHOLDER_SVG, media_type="image/svg+xml", headers={"Cache-Control": "max-age=300"})
+            folder.mkdir(parents=True, exist_ok=True)
+            for old in folder.glob(f"{file_id}-*.jpg"):
+                old.unlink(missing_ok=True)
+            tmp = dest.with_suffix(".tmp")
+            tmp.write_bytes(data)
+            tmp.replace(dest)
+        return FileResponse(dest, media_type="image/jpeg", headers={"Cache-Control": "max-age=86400"})
 
     @app.post("/review/decide")
     def review_decide(a: int = Form(...), b: int = Form(...), decision: str = Form(...)):
@@ -889,10 +959,11 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
     def marks_reviewed():
         c = conn()
         try:
-            n = changes.mark_reviewed(c, threshold_of(db.get_settings(c)))
+            s = db.get_settings(c)
+            n = changes.mark_reviewed(c, threshold_of(s), s)
         finally:
             c.close()
-        return RedirectResponse(_with_msg("/changes", f"{n} photos from Review marked for removal"), status_code=303)
+        return RedirectResponse(_with_msg("/changes", f"{n} copies from Review marked for removal"), status_code=303)
 
     @app.post("/marks/clear")
     def marks_clear(file_id: Annotated[list[int] | None, Form()] = None, everything: str = Form("")):
@@ -911,7 +982,7 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
             s = db.get_settings(c)
             summ = changes.marks_summary(c)
             rows = changes.marked(c, per_page, (max(page, 1) - 1) * per_page)
-            reviewed = len(changes.review_removals(c, threshold_of(s))) if s["similar_matching"] else 0
+            reviewed = len(changes.all_review_removals(c, s, threshold_of(s)))
             return render(request, "changes.html", gate=changes.gate(c, cfg.mnt), summ=summ, rows=rows,
                           page=page, pages=max(1, -(-summ["files"] // per_page)), reviewed=reviewed,
                           actions=changes.list_actions(c), modes=changes.MODES, msg=msg, error=error, **job_view(c))

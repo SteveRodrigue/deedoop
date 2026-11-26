@@ -559,6 +559,35 @@ def test_a_crafted_media_file_cannot_open_other_files(tmp_path):
         av.stream_hash(str(concat), concat.stat().st_size)
 
 
+
+@pytest.mark.skipif(not __import__("deedup.av").av.tools_available(), reason="ffmpeg not installed")
+def test_m8_fingerprints_and_posters_cannot_open_other_files(tmp_path):
+    """SC3 (M8): the new ffmpeg commands (Chromaprint, video frames, posters)
+    use the same protocol and format whitelists, so a playlist or concat list
+    in the backups cannot make them read another file."""
+    import subprocess
+
+    from deedup import av
+
+    secret = tmp_path / "secret.mkv"
+    subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-f", "lavfi", "-i", "testsrc=d=15:s=64x64",
+                    "-f", "lavfi", "-i", "sine=d=15", "-shortest", str(secret)], check=True)
+    assert av.video_frame(str(secret), 1.0)  # the commands do work on a real file
+    lists = [tmp_path / "evil.m3u8", tmp_path / "list.mp4"]
+    lists[0].write_text(f"#EXTM3U\n#EXT-X-TARGETDURATION:15\n#EXTINF:15,\nfile://{secret}\n#EXT-X-ENDLIST\n")
+    lists[1].write_text(f"ffconcat version 1.0\nfile '{secret}'\n")
+    for crafted in lists:
+        with pytest.raises(RuntimeError):
+            av.video_frame(str(crafted), 1.0)
+        with pytest.raises(RuntimeError):
+            av.poster(str(crafted), 1.0)
+        if av.chromaprint_available():
+            with pytest.raises(RuntimeError):
+                av.audio_fingerprint(str(crafted))
+    with pytest.raises(ValueError):
+        av.poster("concat:/mnt/a.mp4|/mnt/b.mp4", 1.0)
+
+
 # -- milestone 7.5: built-in HTTPS and the scan log (SC8) ------------------------
 
 
