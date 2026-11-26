@@ -111,8 +111,12 @@ def rmdir(path: str) -> None:
         os.rmdir(name, dir_fd=fd)
 
 
-def open_new(path: str, mode: int = 0o644):
-    """Open a new file for writing; fails if anything is already there."""
+def open_new(path: str, mode: int = 0o600):
+    """Open a new file for writing; fails if anything is already there.
+
+    Owner-only until the caller sets the final mode (the cross-disk copy in
+    changes.py copies the original's mode with ``shutil.copystat``), so a
+    half-written copy is never readable by others."""
     with parent(path) as (fd, name):
         nfd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0),
                       mode, dir_fd=fd)

@@ -22,7 +22,7 @@ import ipaddress
 import re
 import secrets
 from pathlib import Path
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, urlparse, urlsplit
 
 from fastapi import HTTPException, Request
 from starlette.datastructures import MutableHeaders
@@ -37,18 +37,24 @@ PUBLIC_PREFIXES = ("/static/",)
 SIGNIN_PATHS = frozenset({"/login", "/first-run"})
 MAX_BODY = 1 << 20  # forms here are small; nothing uploads files
 
-_LOCAL_PATH = re.compile(r"^/(?:[A-Za-z0-9_.~%-][^\\]*)?$")
+_LOCAL_PATH = re.compile(r"^/(?:[A-Za-z0-9_.~%?-][^\\]*)?$")
 
 
 def safe_next(target: str, default: str = "/") -> str:
     """A local path to redirect to: one leading slash, then not a slash or
     backslash (browsers read ``/\\evil.com`` as ``//evil.com``), no control
-    characters."""
-    if not target or len(target) > 2000 or any(ord(ch) < 32 for ch in target):
+    characters, no scheme and no host."""
+    if not target or len(target) > 2000 or any(ord(ch) < 32 or ord(ch) == 127 for ch in target):
         return default
-    if target.startswith("/?") or target == "/":
-        return target
-    return target if _LOCAL_PATH.match(target) else default
+    if "\\" in target:
+        return default
+    # Backslashes are refused above; the replace() only lets static analysis
+    # (CodeQL) see that none are left before urlparse(), which ignores them.
+    target = target.replace("\\", "/")
+    parsed = urlparse(target)
+    if parsed.netloc or parsed.scheme or not _LOCAL_PATH.match(target):
+        return default
+    return target
 
 
 # -- addresses behind proxies ----------------------------------------------------
@@ -173,7 +179,7 @@ def inline_script_hashes(template: Path) -> list[str]:
     silently break or weaken the policy."""
     text = template.read_text(encoding="utf-8")
     out = []
-    for body in re.findall(r"<script>(.*?)</script>", text, flags=re.S):
+    for body in re.findall(r"<script>(.*?)</script\s*>", text, flags=re.S | re.I):
         out.append("'sha256-" + base64.b64encode(hashlib.sha256(body.encode()).digest()).decode() + "'")
     return out
 

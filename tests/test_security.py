@@ -164,7 +164,7 @@ def test_templates_escape_and_have_no_inline_script():
         assert "autoescape false" not in text, f.name
         assert not re.search(r"\son[a-z]+\s*=", text), f"{f.name}: inline event handler"
         assert "javascript:" not in text, f.name
-        scripts = re.findall(r"<script>", text)
+        scripts = re.findall(r"<script\b[^>]*>(?!</script)", text, flags=re.I)
         assert not scripts or f.name == "base.html", f"{f.name}: inline <script>"
 
 
@@ -329,6 +329,7 @@ def test_reset_password_from_the_console(unraid, monkeypatch, capsys):
     ("/duplicates?method=image#g1", True), ("/", True), ("/?x=1", True), ("/changes/3", True),
     ("//evil.example", False), ("/\\evil.example", False), ("https://evil.example", False),
     ("/\tevil", False), ("evil", False), ("", False), ("/a\\b", False),
+    ("/\x7fevil", False), ("javascript:alert(1)", False), ("///evil.example", False),
 ])
 def test_redirects_stay_local(target, ok):
     """A7: only local paths; /\\ is read as // by browsers."""
