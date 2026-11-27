@@ -123,6 +123,8 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
             "SELECT * FROM jobs WHERE state NOT IN ('queued', 'running') AND type = 'scan' ORDER BY id DESC LIMIT 1"
         ).fetchone()
         live = worker.status.snapshot() if worker.current_job else {}
+        queued_scan = c.execute("SELECT id FROM jobs WHERE type = 'scan' AND state = 'queued' AND id != ? "
+                                "ORDER BY id LIMIT 1", (active["id"] if active else 0,)).fetchone()
         now = dt.datetime.now().timestamp()
         elapsed = fmt_duration(now - live["started"]) if live.get("started") else ""
         last_progress = json.loads(last["progress"]) if last else {}
@@ -131,11 +133,12 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
         return {
             "active": dict(active) if active else None,
             "last": dict(last) if last else None,
+            "queued_scan": queued_scan["id"] if queued_scan else None,
             "last_progress": last_progress,
             "live": live,
             "elapsed": elapsed,
             "pv": progress_view(live, now, last_walked) if live else {},
-            "log_tail": worker.status.recent_log(6) if worker.current_job else [],
+            "log_tail": worker.status.recent_log(8) if worker.current_job else [],
             "paused": worker.control.paused if worker.current_job else False,
         }
 
@@ -158,10 +161,13 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
     def public_status(c) -> dict:
         """What the sign-in page shows to anyone: no file names, no paths."""
         active = db.active_job(c)
+        scan = c.execute("SELECT state FROM jobs WHERE type = 'scan' AND state IN ('queued', 'running') "
+                         "ORDER BY id LIMIT 1").fetchone()
         last = c.execute("SELECT finished_at, state FROM jobs WHERE type = 'scan' AND state NOT IN ('queued', 'running') "
                          "ORDER BY id DESC LIMIT 1").fetchone()
         st = queries.index_stats(c, cfg.db_path)
-        return {"scanning": active is not None and active["type"] == "scan", "busy": active is not None,
+        return {"scanning": scan is not None and scan["state"] == "running",
+                "scan_queued": scan is not None and scan["state"] == "queued", "busy": active is not None,
                 "last_scan": last["finished_at"] if last else None, "last_state": last["state"] if last else "",
                 "files": st.get("files", 0), "groups": st.get("groups", 0), "wasted": st.get("total_wasted", 0)}
 
@@ -319,8 +325,14 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
 
     # -- pages ----------------------------------------------------------------
 
+    DASHBOARD_NOTICES = {
+        "noshares": ("err", "There is nothing to scan yet: tick the shares to scan on the Setup screen and save, "
+                            "then start the scan."),
+        "queued": ("ok", "Scan queued: it starts as soon as the job that is running now finishes."),
+    }
+
     @app.get("/", response_class=HTMLResponse)
-    def dashboard(request: Request):
+    def dashboard(request: Request, notice: Annotated[str, Query(max_length=16)] = ""):
         c = conn()
         try:
             stats = queries.index_stats(c, cfg.db_path)
@@ -328,7 +340,7 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
             return render(request, "dashboard.html", stats=stats, roots=roots,
                           by_cat=queries.wasted_by_category(c), disks=queries.per_disk(c),
                           settings=(s := db.get_settings(c)), methods_on=scanners.methods(s),
-                          raw_only=scanners.raw_only(s), **job_view(c))
+                          raw_only=scanners.raw_only(s), notice=DASHBOARD_NOTICES.get(notice), **job_view(c))
         finally:
             c.close()
 
@@ -1126,12 +1138,20 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
     def scan_start():
         c = conn()
         try:
-            if db.active_job(c) is None:
-                db.enqueue_job(c, "scan")
+            if not db.get_settings(c)["shares"] and not c.execute(
+                    "SELECT 1 FROM roots WHERE enabled = 1 AND source != 'share' LIMIT 1").fetchone():
+                # Nothing to read: say so instead of a scan that "finishes" at once.
+                return RedirectResponse("/?notice=noshares", status_code=303)
+            if c.execute("SELECT 1 FROM jobs WHERE type = 'scan' AND state IN ('queued', 'running')").fetchone():
+                return RedirectResponse("/", status_code=303)
+            blocker = db.active_job(c)
+            # Another job (a benchmark, a change, regrouping) is running: the scan
+            # waits in the queue behind it instead of being silently dropped.
+            db.enqueue_job(c, "scan")
         finally:
             c.close()
         worker.wake()
-        return RedirectResponse("/", status_code=303)
+        return RedirectResponse("/?notice=queued" if blocker else "/", status_code=303)
 
     @app.post("/scan/pause")
     def scan_pause():

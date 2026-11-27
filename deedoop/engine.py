@@ -35,7 +35,7 @@ from .archive_index import (
     refresh_coverage,
 )
 from .categories import group_category
-from .control import Control, Status, fmt_bytes
+from .control import Control, JobProblem, Status, fmt_bytes
 from .discovery import natural_key, sync_share_roots
 from .hashing import Expected, FileChanged, full_hash, partial_hash
 from .imaging import IMAGE_HASH_EXTS, MAX_IMAGE_BYTES, NotAnImage, read_and_hash_image, read_image_bytes
@@ -123,6 +123,9 @@ def run_scan(ctx: ScanContext) -> dict:
         sync_share_roots(conn, ctx.mnt)
         settings = db.get_settings(conn)
         roots = conn.execute("SELECT * FROM roots WHERE enabled = 1 ORDER BY path").fetchall()
+        if not roots:
+            raise JobProblem("Nothing to scan: no share or folder is selected. Tick the shares to scan "
+                             "on the Setup screen, save, then start the scan again.")
         disks = _disks_in_order(roots)
         st = ctx.status
         on = scanners.active_keys(settings)

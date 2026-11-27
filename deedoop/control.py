@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import collections
 import copy
 import threading
 import time
@@ -9,10 +10,17 @@ from typing import Any
 
 LOG_LIMIT = 1000            # scan log entries kept per job; more are counted, not kept
 LOG_MESSAGE_MAX = 500
+RATE_WINDOW = 10.0          # seconds of samples behind the live files/s and MB/s
 
 
 class Stopped(Exception):
     """Raised inside a job when the user stopped it or the schedule window ended."""
+
+
+class JobProblem(Exception):
+    """A job cannot run for a reason the user can fix (nothing selected, say).
+    The worker records it as a failure with this message alone, no traceback,
+    so the dashboard can show it as it is."""
 
 
 class Control:
@@ -67,6 +75,7 @@ class Status:
         self._data: dict[str, Any] = {}
         self._log: list[tuple[float, str, str]] = []
         self._flushed = 0
+        self._samples: collections.deque[tuple[float, str, int, int]] = collections.deque(maxlen=64)
 
     # -- progress -----------------------------------------------------------
 
@@ -76,6 +85,7 @@ class Status:
             self._data = {"disks": {}, "started": now, "paused_total": 0.0, "paused_since": None,
                           "phase_started": now, "phase_active": 0.0, "log_dropped": 0, **kw}
             self._log, self._flushed = [], 0
+            self._samples.clear()
 
     def _active(self, now: float) -> float:
         d = self._data
@@ -123,8 +133,37 @@ class Status:
         with self._lock:
             snap = copy.deepcopy(self._data)
             if snap:
-                snap["active"] = self._active(time.time())
+                now = time.time()
+                snap["active"] = self._active(now)
+                snap["rate_files"], snap["rate_bytes"] = self._rates(snap, now)
             return snap
+
+    def _rates(self, snap: dict[str, Any], now: float) -> tuple[float, float]:
+        """Files and bytes per second in the current phase over the last
+        :data:`RATE_WINDOW` seconds, so the dashboard shows the speed now,
+        not the average since the phase began. 0 while paused."""
+        phase = snap.get("phase") or ""
+        disks = (snap.get("disks") or {}).values()
+        if phase == "walk":
+            files = sum(d.get("walked", 0) for d in disks)
+            size = sum(d.get("walked_bytes", 0) for d in disks)
+        else:
+            files = sum(d.get("done_files", 0) for d in disks) or (snap.get("done") or 0)
+            size = sum(d.get("done_bytes", 0) for d in disks)
+        s = self._samples
+        if s and s[-1][1] != phase:
+            s.clear()
+        if not s or now - s[-1][0] >= 0.25:
+            s.append((now, phase, files, size))
+        while len(s) > 2 and now - s[0][0] > RATE_WINDOW:
+            s.popleft()
+        if snap.get("paused_since") or len(s) < 2:
+            return 0.0, 0.0
+        t0, _, f0, b0 = s[0]
+        span = now - t0
+        if span < 0.5:
+            return 0.0, 0.0
+        return max(0.0, (files - f0) / span), max(0.0, (size - b0) / span)
 
     def clear(self) -> None:
         with self._lock:
@@ -195,6 +234,7 @@ def fmt_bytes(n: float | None) -> str:
 # -- what the status card shows ------------------------------------------------------
 
 ETA_MIN_SECONDS = 15        # no ETA until a phase has run this long
+ETA_LIVE_SECONDS = 3        # ... or this long, when the live speed is known
 ETA_MIN_FRACTION = 0.01     # ... and done 1% of its work
 
 
@@ -212,12 +252,15 @@ def progress_view(live: dict, now: float, last_walked: int = 0) -> dict:
     out: dict[str, Any] = {"plan": [{"key": p, "name": phase_name(p)} for p in plan],
                            "phase_no": plan.index(key) + 1 if key else 0, "phase_count": len(plan),
                            "phase_name": phase_name(phase) if phase else "", "pct": None, "eta": "",
-                           "rough": False, "unit": "files", "done": 0, "todo": 0}
+                           "rough": False, "unit": "files", "done": 0, "todo": 0,
+                           "rate_files": live.get("rate_files", 0.0), "rate_bytes": live.get("rate_bytes", 0.0)}
     disks = (live.get("disks") or {}).values()
     if phase == "walk":
         done = sum(d.get("walked", 0) for d in disks)
         todo = last_walked if last_walked > done else 0
         out["rough"] = True
+        out["walked_bytes"] = sum(d.get("walked_bytes", 0) for d in disks)
+        out["walked_dirs"] = sum(d.get("walked_dirs", 0) for d in disks)
     elif any(d.get("todo_bytes") for d in disks):
         done, todo = sum(d.get("done_bytes", 0) for d in disks), sum(d.get("todo_bytes", 0) for d in disks)
         out["unit"] = "bytes"
@@ -232,6 +275,10 @@ def progress_view(live: dict, now: float, last_walked: int = 0) -> dict:
         spent = live.get("active", 0.0) - live.get("phase_active", 0.0)
         if live.get("paused_since"):
             out["eta"] = "paused"
+        elif done < todo and spent >= ETA_LIVE_SECONDS and (rate := out["rate_bytes"] if out["unit"] == "bytes"
+                                                           else out["rate_files"]) > 0:
+            # The speed over the last few seconds: shows up sooner and follows a disk that slows down.
+            out["eta"] = "about " + fmt_seconds((todo - done) / rate) + " left"
         elif spent >= ETA_MIN_SECONDS and frac >= ETA_MIN_FRACTION and done < todo:
             out["eta"] = "about " + fmt_seconds(spent * (todo - done) / done) + " left"
     # whole-plan bar: each phase one segment

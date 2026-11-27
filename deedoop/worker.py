@@ -17,7 +17,7 @@ import traceback
 from . import changes, db
 from .benchmark import BenchConfig, disk_paths_for_benchmark, run_benchmark
 from .config import AppConfig
-from .control import Control, Status, Stopped, fmt_seconds
+from .control import Control, JobProblem, Status, Stopped, fmt_seconds
 from .discovery import list_disks
 from .engine import ScanContext, regroup, run_scan
 
@@ -235,6 +235,9 @@ class Worker:
                     raise ValueError(f"unknown job type {job['type']}")
             except Stopped as e:
                 state, error = ("queued", None) if str(e) == "shutdown" else ("stopped", str(e))
+            except JobProblem as e:
+                log.warning("job %s: %s", job["id"], e)
+                state, error = "failed", str(e)
             except Exception as e:
                 log.exception("job %s failed", job["id"])
                 state, error = "failed", f"{type(e).__name__}: {e}\n{traceback.format_exc(limit=5)}"

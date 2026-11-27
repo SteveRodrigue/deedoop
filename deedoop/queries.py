@@ -7,6 +7,7 @@ import io
 import json
 import os
 import sqlite3
+import time
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -60,7 +61,7 @@ def index_stats(conn: sqlite3.Connection, db_path: Path) -> dict:
     return {
         "files": row["files"], "bytes": row["bytes"], "groups": g["groups"], "wasted": g["wasted"],
         "dup_files": g["dup_files"], "built_at": g["built_at"], "full_hashed": hashed,
-        "errors": errors, "index_bytes": size,
+        "errors": errors, "index_bytes": size, "appdata_bytes": appdata_bytes(Path(db_path).parent),
         "image_groups": gi["groups"], "image_wasted": gi["wasted"], "total_wasted": total,
         "media_groups": gm["groups"], "media_wasted": gm["wasted"], "videos": avc[0], "songs": avc[1],
         "media": media[0], "media_dated": media[1],
@@ -69,6 +70,36 @@ def index_stats(conn: sqlite3.Connection, db_path: Path) -> dict:
         "media_similar_pending": gms["pending"],
         "archives": arch[0], "archive_members": arch[1], "archive_new": arch[2],
     }
+
+
+_APPDATA_CACHE: dict[str, tuple[float, int]] = {}
+APPDATA_CACHE_SECONDS = 60.0
+
+
+def appdata_bytes(config_dir: Path) -> int:
+    """Everything deedoop keeps in its appdata folder: the index, the thumbnail
+    cache and the TLS files. Walked at most once a minute, since the dashboard
+    asks on every load and the thumbnail cache can hold many small files."""
+    key, now = str(config_dir), time.monotonic()
+    hit = _APPDATA_CACHE.get(key)
+    if hit and now - hit[0] < APPDATA_CACHE_SECONDS:
+        return hit[1]
+    total, stack = 0, [key]
+    while stack:
+        try:
+            with os.scandir(stack.pop()) as it:
+                for e in it:
+                    try:
+                        if e.is_dir(follow_symlinks=False):
+                            stack.append(e.path)
+                        elif e.is_file(follow_symlinks=False):
+                            total += e.stat(follow_symlinks=False).st_size
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+    _APPDATA_CACHE[key] = (now, total)
+    return total
 
 
 # Exact groups that an image or media group already covers would count the

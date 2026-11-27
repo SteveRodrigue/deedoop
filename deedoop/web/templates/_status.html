@@ -1,5 +1,5 @@
-{# Live scan status. Polled by htmx every 2 s while a job is active. #}
-<div id="status" {% if active %}hx-get="/partials/status" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>
+{# Live scan status. Polled by htmx every second while a job is active. #}
+<div id="status" {% if active %}hx-get="/partials/status" hx-trigger="every 1s" hx-swap="outerHTML"{% endif %}>
 {% if active %}
   {% set job_names = {"benchmark": "Benchmark", "action": "Change", "undo": "Undo", "purge": "Emptying quarantine", "regroup": "Regrouping"} %}
   <div class="row between">
@@ -23,6 +23,7 @@
       <form method="post" action="/scan/stop">{% include "_csrf.html" %}<button class="secondary">Stop</button></form>
     </div>
   </div>
+  {% if queued_scan and active.type != "scan" %}<p class="small"><span class="pill">queued</span> Scan #{{ queued_scan }} starts as soon as this finishes.</p>{% endif %}
   {% if pv.segments %}
   <ol class="phases" aria-label="Phase {{ pv.phase_no }} of {{ pv.phase_count }}">
     {% for seg in pv.segments %}<li class="{{ seg.state }}" title="{{ seg.name }}"><span{% if seg.state == "now" and pv.pct is not none %} style="width:{{ pv.pct }}%"{% endif %}></span></li>{% endfor %}
@@ -32,12 +33,16 @@
   <p class="phase-progress small">
     {% if live.phase == "walk" %}
       {{ "{:,}".format(pv.done) }} files walked{% if pv.todo %} of about {{ "{:,}".format(pv.todo) }} <span class="muted">(the last scan's count)</span>{% endif %}
+      · {{ pv.walked_bytes | bytes }} in {{ "{:,}".format(pv.walked_dirs) }} folders
     {% elif pv.unit == "bytes" %}
       {{ pv.pct }}% · {{ pv.done | bytes }} of {{ pv.todo | bytes }}
     {% else %}
       {{ pv.pct }}% · {{ "{:,}".format(pv.done) }} of {{ "{:,}".format(pv.todo) }} files
     {% endif %}
-    {% if pv.eta %}· <strong>{{ pv.eta }}</strong>{% if pv.rough %} <span class="muted">(rough)</span>{% endif %}{% endif %}
+    {% if pv.unit == "bytes" and pv.rate_bytes >= 1024 %}· <span class="rate">{{ pv.rate_bytes | bytes }}/s</span>
+    {% elif pv.rate_files >= 1 %}· <span class="rate">{{ "{:,}".format(pv.rate_files | round | int) }} files/s</span>{% endif %}
+    {% if pv.eta %}· <strong>{{ pv.eta }}</strong>{% if pv.rough %} <span class="muted">(rough)</span>{% endif %}
+    {% elif live.phase == "walk" and not pv.todo %}<span class="muted">· first scan, so no total to count down from yet</span>{% endif %}
     <span class="muted">this phase</span>
   </p>
   {% endif %}
@@ -56,7 +61,7 @@
       <tr>
         <td>{{ name }}</td>
         <td><span class="pill {{ 'ok' if d.state in ('walking','hashing','reading') }}">{{ d.state or "waiting" }}</span></td>
-        <td class="num">{{ "{:,}".format(d.walked or 0) }}</td>
+        <td class="num">{{ "{:,}".format(d.walked or 0) }}{% if d.walked_bytes %}<div class="muted small">{{ d.walked_bytes | bytes }}</div>{% endif %}</td>
         <td class="num">{{ "{:,}".format(d.new or 0) }} / {{ "{:,}".format(d.changed or 0) }}</td>
         <td>
           {% if d.todo_files %}
@@ -88,7 +93,7 @@
         Last {{ last.type }} #{{ last.id }}: <span class="pill {{ 'ok' if last.state == 'done' else 'warn' }}">{{ last.state }}</span>
         <span class="muted">finished {{ last.finished_at | time }}</span>
         <a class="small" href="/log?job={{ last.id }}">log</a>
-        {% if last.error %}<div class="muted small">{{ last.error.splitlines()[0] }}</div>{% endif %}
+        {% if last.error %}<p class="flash {{ 'err' if last.state == 'failed' else 'warn' }} small" role="status">{{ last.error.splitlines()[0] }}{% if last.state == 'failed' and 'Setup' in last.error %} <a href="/setup">Go to Setup</a>{% endif %}</p>{% endif %}
         {% set r = last_progress.get("result", {}) %}
         {% if r.groups is defined %}<div class="small">{{ "{:,}".format(r.groups) }} exact groups ({{ r.wasted | bytes }}){% if r.image_groups is defined %}, {{ "{:,}".format(r.image_groups) }} photos with different metadata ({{ r.image_wasted | bytes }}){% endif %}{% if r.media_groups is defined %}, {{ "{:,}".format(r.media_groups) }} recordings with other tags ({{ r.media_wasted | bytes }}){% endif %}.</div>{% endif %}
       {% else %}
