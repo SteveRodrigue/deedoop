@@ -192,3 +192,13 @@ def test_theme_toggle_is_on_every_page(unraid):
             assert 'data-theme-choice="dark"' in r.text and "deedoop-theme" in r.text, path
         css = client.get("/static/style.css").text
         assert ':root[data-theme="dark"]' in css and ':root:not([data-theme="light"])' in css
+
+
+def test_first_run_form_says_where_the_setup_code_is(unraid):
+    with TestClient(create_app(unraid, start_worker=False)) as client:
+        page = client.get("/login").text
+    form = page[page.index('action="/first-run"'):page.index("</form>")]
+    assert 'aria-describedby="setup-code-help"' in form
+    assert "Logs" in form
+    assert "docker logs deedoop" in form
+    assert page.index("Create the admin account</h2>") < page.index("<h2>Status</h2>")

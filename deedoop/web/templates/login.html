@@ -2,6 +2,7 @@
 {% block title %}{{ "Create the admin account" if first_run else "Sign in" }} · deedoop{% endblock %}
 {% block content %}
 <div class="login">
+{% set status_card %}
 <section class="card">
   <h2>Status</h2>
   <p>{% if status.scanning %}<span class="pill ok">scanning</span> A scan is running.
@@ -15,16 +16,20 @@
   </dl>
   {% if public_view %}<p class="small"><a href="/">Browse read-only without signing in</a></p>{% endif %}
 </section>
+{% endset %}
 
 {% if first_run %}
 <section class="card callout">
   <h2>Create the admin account</h2>
   <p class="muted">deedoop has no admin yet. Signed out, it is read-only; the admin can change settings and files.
-    To prove you run this server, enter the <strong>setup code</strong> from the container log
-    (on Unraid: click the deedoop icon, then <em>Logs</em>). The code changes every hour and on every restart.</p>
+    To prove you run this server, enter the <strong>setup code</strong> that deedoop writes to its container log.
+    A new code is written every hour and on every restart.</p>
   {% if error %}<div class="flash err" role="alert">{{ error }}</div>{% endif %}
   <form method="post" action="/first-run" class="stack" data-public>{% include "_csrf.html" %}
-    <label>Setup code <input type="text" name="code" autocomplete="one-time-code" required maxlength="64" placeholder="ABCD-EFGH-JKLM-NPQR" class="mono"></label>
+    <label>Setup code <input type="text" name="code" autocomplete="one-time-code" required maxlength="64" placeholder="ABCD-EFGH-JKLM-NPQR" class="mono" aria-describedby="setup-code-help"></label>
+    <p class="muted small" id="setup-code-help">Where to find it: Unraid <strong>Docker</strong> tab, click the deedoop icon, then <strong>Logs</strong>, and look for the line ending in
+      <span class="mono">setup code: XXXX-XXXX-XXXX-XXXX</span>. Or in the Unraid terminal:
+      <span class="mono">docker logs deedoop 2>&amp;1 | grep "setup code" | tail -1</span></p>
     <label>User name <input type="text" name="username" value="admin" autocomplete="username" required maxlength="64"></label>
     <label>Password <input type="password" name="password" autocomplete="new-password" required minlength="12" maxlength="1024"></label>
     <label>Password again <input type="password" name="password2" autocomplete="new-password" required minlength="12" maxlength="1024"></label>
@@ -32,7 +37,9 @@
     <button>Create the admin account</button>
   </form>
 </section>
+{{ status_card }}
 {% else %}
+{{ status_card }}
 <section class="card">
   <h2>Sign in</h2>
   {% if error %}<div class="flash err" role="alert">{{ error }}</div>{% endif %}
