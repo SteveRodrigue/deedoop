@@ -55,8 +55,10 @@
 <main>
 {% if not signed_in and nav != 'login' %}<p class="banner">You are not signed in, so deedoop is read-only. <a href="/login?next={{ request.url.path | urlencode }}">Sign in</a> to make changes.</p>{% endif %}
 {% if signed_in and legacy_password %}<p class="banner warn">The old <span class="mono">Password</span> (DEEDOOP_PASSWORD) variable is still set. It became your admin password and is no longer used for anything else: remove it from the container settings.</p>{% endif %}
+{% if signed_in and gate and gate.allowed and gate.writable is false %}<p class="banner warn" id="mnt-readonly"><strong>/mnt is read-only.</strong> Changes are allowed in <a href="/setup#changes">Setup</a>, but the container sees <span class="mono">/mnt</span> read-only, so deedoop cannot move or delete anything. Scans and the benchmark still work. To allow changes, edit the container and set the <span class="mono">/mnt</span> path's access mode to read/write.</p>{% endif %}
 {% block content %}{% endblock %}
 </main>
+<div id="toasts" class="toasts" aria-live="polite">{% block toasts %}{% endblock %}</div>
 <footer>deedoop {{ version }} · dedupe your hoard, safely</footer>
 </body>
 </html>

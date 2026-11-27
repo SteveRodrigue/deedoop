@@ -1,5 +1,7 @@
 {% extends "base.html" %}
+{% from "_toast.html" import toast %}
 {% block title %}Review songs and videos · deedoop{% endblock %}
+{% block toasts %}{% if msg %}{{ toast(msg) }}{% endif %}{% if done in decisions %}{{ toast("Saved: " ~ decisions[done]) }}{% endif %}{% endblock %}
 {% macro side(p, which, pr) %}
 <div class="side {{ 'keeper' if pr.keeper == which }}">
   {% if p.play and p.kind == "video" %}

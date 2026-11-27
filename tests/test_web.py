@@ -194,6 +194,57 @@ def test_theme_toggle_is_on_every_page(unraid):
         assert ':root[data-theme="dark"]' in css and ':root:not([data-theme="light"])' in css
 
 
+def test_saves_confirm_with_a_floating_toast(unraid):
+    with make_client(unraid) as client:
+        r = client.post("/setup/settings", data={"disk_mode": "single"}, follow_redirects=True)
+        assert 'id="toasts" class="toasts" aria-live="polite"' in r.text
+        assert 'data-toast="ok"' in r.text and "Settings saved" in r.text
+        assert "<div class=\"flash ok\">Saved.</div>" not in r.text
+        r = client.post("/setup/custom", data={"path": "/etc"}, follow_redirects=True)
+        assert 'data-toast="err"' in r.text and "<strong>Error:</strong>" in r.text and "must be inside" in r.text
+        # Unknown "saved" codes still confirm, without echoing the code.
+        r = client.get("/setup?saved=whatever")
+        assert "Saved" in r.text and "whatever" not in r.text
+        # No toast without a save.
+        assert "data-toast=" not in client.get("/setup").text
+        # The page title holds only the title (the security log was once rendered into it).
+        head = client.get("/setup").text.split("</title>")[0]
+        assert head.endswith("<title>Setup · deedoop")
+
+
+def test_other_saves_confirm_too(unraid):
+    with make_client(unraid) as client:
+        r = client.post("/review/threshold", data={"threshold": "6"}, follow_redirects=True)
+        assert "Match closeness set to 6" in r.text and 'data-toast="ok"' in r.text
+        r = client.post("/marks/clear", data={"everything": "1"}, follow_redirects=True)
+        assert "All marks cleared" in r.text
+        r = client.post("/setup/benchmark", follow_redirects=True)
+        assert "Benchmark started" in r.text
+        wait_idle(client)
+
+
+def test_read_only_mnt_is_flagged_when_changes_are_allowed(unraid, monkeypatch):
+    from deedoop import changes
+    with make_client(unraid) as client:
+        c = db.connect(unraid.db_path)
+        db.set_settings(c, {"allow_changes": True})
+        c.close()
+        assert 'id="mnt-readonly"' not in client.get("/").text
+        monkeypatch.setattr(changes, "mnt_writable", lambda mnt: False)
+        for url in ("/", "/setup", "/duplicates"):
+            assert 'id="mnt-readonly"' in client.get(url).text, url
+        r = client.get("/setup?saved=changes")
+        assert "but /mnt is read-only" in r.text and 'data-toast="err"' in r.text
+        # Benchmarks only read, so they still run on a read-only /mnt.
+        r = client.post("/setup/benchmark", follow_redirects=True)
+        assert "Benchmark started" in r.text
+        wait_idle(client)
+        c = db.connect(unraid.db_path)
+        db.set_settings(c, {"allow_changes": False})
+        c.close()
+        assert 'id="mnt-readonly"' not in client.get("/").text
+
+
 def test_first_run_form_says_where_the_setup_code_is(unraid):
     with TestClient(create_app(unraid, start_worker=False)) as client:
         page = client.get("/login").text

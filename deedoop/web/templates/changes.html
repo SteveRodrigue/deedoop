@@ -1,8 +1,8 @@
 {% extends "base.html" %}
+{% from "_toast.html" import toast %}
 {% block title %}Changes · deedoop{% endblock %}
+{% block toasts %}{% if msg %}{{ toast(msg) }}{% endif %}{% if error %}{{ toast(error, "err") }}{% endif %}{% endblock %}
 {% block content %}
-{% if msg %}<p class="flash ok">{{ msg }}</p>{% endif %}
-{% if error %}<p class="flash err">{{ error }}</p>{% endif %}
 
 {% if not gate.open %}
 <section class="card callout">

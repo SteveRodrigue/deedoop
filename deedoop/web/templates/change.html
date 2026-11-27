@@ -1,8 +1,8 @@
 {% extends "base.html" %}
+{% from "_toast.html" import toast %}
 {% block title %}{{ a.label }} · deedoop{% endblock %}
+{% block toasts %}{% if msg %}{{ toast(msg) }}{% endif %}{% if error %}{{ toast(error, "err") }}{% endif %}{% endblock %}
 {% block content %}
-{% if msg %}<p class="flash ok">{{ msg }}</p>{% endif %}
-{% if error %}<p class="flash err">{{ error }}</p>{% endif %}
 <p class="small"><a href="/changes">← Changes</a></p>
 {% if active %}<section class="card">{% include "_status.html" %}</section>{% endif %}
 <section class="card">
