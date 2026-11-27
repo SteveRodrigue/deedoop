@@ -10,22 +10,45 @@ web UI, or SSH), and a GitHub account that can read the package.
 
 ## 1. Make a token that can only read packages
 
-GitHub's container registry takes a **classic** personal access token
-(fine-grained tokens do not work with it yet).
+The server signs in to GitHub's container registry (`ghcr.io`) with a GitHub
+personal access token instead of your password. This token needs exactly one
+permission, or "scope":
+
+| What | Value |
+|---|---|
+| Token type | **Personal access token (classic)**. GitHub's registry does not accept fine-grained tokens ("GitHub Packages only supports authentication using a personal access token (classic)", [GitHub docs](https://docs.github.com/en/packages/learn-github-packages/about-permissions-for-github-packages#about-scopes-and-permissions-for-package-registries)) |
+| Scope | **`read:packages`** only. It lets the token download container images and nothing else: it cannot push or delete images, or read or change your code, issues or settings |
+| Expiration | **90 days** is a good default. You only need it to install and update; when it expires, make a new one and sign in again (step 2) |
+| Account | One that can read the package. The owner's own account (SteveRodrigue) always can |
+
+Do **not** tick `repo`, `write:packages` or `delete:packages`. A pull does not
+need them, and ticking `write:packages` makes GitHub tick `repo` too, which gives
+the token read and write access to all your repositories.
 
 1. Open <https://github.com/settings/tokens/new> (Settings > Developer settings >
-   Personal access tokens > Tokens (classic) > Generate new token).
-2. Note: `unraid deedoop pull`. Expiration: your choice (90 days is a good
-   default; you only need it to install and update).
-3. Tick **only** `read:packages`. Nothing else.
-4. Generate and copy the token. GitHub shows it once.
+   Personal access tokens > **Tokens (classic)** > Generate new token >
+   Generate new token (classic)). Not "Fine-grained tokens".
+2. **Note**: `unraid deedoop pull`, so you know later what it is for.
+3. **Expiration**: 90 days (or a custom date). Avoid "No expiration".
+4. Under **Select scopes**, tick **only** `read:packages`. Leave every other box
+   empty, including `repo`.
+5. Click **Generate token** and copy it (it starts with `ghp_`). GitHub shows it
+   only once. You paste it in step 2 and do not need to keep it after that.
+
+The token stands in for your GitHub password, for `ghcr.io` only: in step 2 you give
+Docker your GitHub login as the user name and the token as the password. Unraid's
+Docker tab has no field for registry credentials, so this sign-in happens once
+in the terminal, and **Apply** and **force update** then use it.
+
+To revoke it at any time: <https://github.com/settings/tokens>, click the token,
+**Delete**. Nothing else on GitHub is affected.
 
 ## 2. Sign the server in to ghcr.io
 
 In the Unraid terminal (replace `YOUR_GITHUB_LOGIN`):
 
 ```sh
-read -rs GHCR_TOKEN   # paste the token, press Enter (nothing is shown)
+read -rs GHCR_TOKEN   # paste the ghp_ token from step 1, press Enter (nothing is shown)
 printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u YOUR_GITHUB_LOGIN --password-stdin
 unset GHCR_TOKEN
 docker pull ghcr.io/steverodrigue/deedoop:latest   # checks the sign-in works

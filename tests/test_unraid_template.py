@@ -68,3 +68,13 @@ def test_readme_link_points_at_the_install_guide(tpl):
     readme = tpl.findtext("ReadMe")
     assert readme.endswith("/docs/install-unraid.md")
     assert (ROOT / "docs" / "install-unraid.md").is_file()
+
+
+def test_install_guide_names_the_token_type_scope_and_expiry():
+    guide = (ROOT / "docs" / "install-unraid.md").read_text()
+    token = guide[guide.index("## 1.") : guide.index("## 2.")]
+    assert "Personal access token (classic)" in token
+    assert "fine-grained" in token
+    assert "`read:packages`" in token
+    assert "Expiration" in token
+    assert "--password-stdin" in guide
