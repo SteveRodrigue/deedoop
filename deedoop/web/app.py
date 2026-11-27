@@ -165,19 +165,22 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
                 "last_scan": last["finished_at"] if last else None, "last_state": last["state"] if last else "",
                 "files": st.get("files", 0), "groups": st.get("groups", 0), "wasted": st.get("total_wasted", 0)}
 
+    def _login_page(request: Request, c, *, next: str = "/", error: str = "", ticket: str = ""):
+        first_run = not auth.has_admin(c)
+        if first_run and not ticket:
+            setup_code.current()  # makes sure a valid code is in the log
+        return templates.TemplateResponse(request, "login.html", {
+            "nav": "login", "next": safe_next(next), "error": error, "first_run": first_run,
+            "ticket": ticket, "status": public_status(c), "public_view": request.state.public_view,
+            "gate": {"open": False}})
+
     @app.get("/login", response_class=HTMLResponse)
     def login_page(request: Request, next: str = "/", error: str = ""):
         if request.state.session is not None:
             return RedirectResponse(safe_next(next), status_code=303)
         c = conn()
         try:
-            first_run = not auth.has_admin(c)
-            if first_run:
-                setup_code.current()  # makes sure a valid code is in the log
-            return templates.TemplateResponse(request, "login.html", {
-                "nav": "login", "next": safe_next(next), "error": error, "first_run": first_run,
-                "status": public_status(c), "public_view": request.state.public_view,
-                "gate": {"open": False}})
+            return _login_page(request, c, next=next, error=error)
         finally:
             c.close()
 
@@ -197,31 +200,43 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
 
     @app.post("/first-run")
     def first_run(request: Request, code: Annotated[str, Form(max_length=64)] = "",
+                  ticket: Annotated[str, Form(max_length=128)] = "",
                   username: Annotated[str, Form(max_length=64)] = "admin",
                   password: Annotated[str, Form(max_length=auth.MAX_PASSWORD)] = "",
                   password2: Annotated[str, Form(max_length=auth.MAX_PASSWORD)] = ""):
+        """Two steps. 1: the setup code from the log; a right one returns the
+        account form with a ticket. 2: the ticket, user name and password."""
         c = conn()
         try:
             if auth.has_admin(c):
                 return RedirectResponse("/login", status_code=303)
-            # Wrong codes are throttled like wrong passwords.
+            # Wrong codes and tickets are throttled like wrong passwords.
             wait = auth.lockout_remaining(c, _ip(request))
             if wait:
                 return RedirectResponse(f"/login?error={_q('Too many wrong setup codes. Try again later.')}",
                                         status_code=303)
-            if not setup_code.check(code):
+            if not ticket:
+                if not setup_code.check(code):
+                    try:
+                        auth.authenticate(c, "(setup code)", "", _ip(request))
+                    except auth.AuthError:
+                        pass
+                    return RedirectResponse(f"/login?error={_q('That setup code is wrong or has expired. The current code is in the container log.')}",
+                                            status_code=303)
+                return _login_page(request, c, ticket=setup_code.issue_ticket())
+            if not setup_code.check_ticket(ticket):
                 try:
                     auth.authenticate(c, "(setup code)", "", _ip(request))
                 except auth.AuthError:
                     pass
-                return RedirectResponse(f"/login?error={_q('That setup code is wrong or has expired. The current code is in the container log.')}",
+                return RedirectResponse(f"/login?error={_q('That step took too long. Enter the setup code again.')}",
                                         status_code=303)
             if password != password2:
-                return RedirectResponse(f"/login?error={_q('The two passwords are different.')}", status_code=303)
+                return _login_page(request, c, ticket=ticket, error="The two passwords are different.")
             try:
                 uid = auth.create_admin(c, username, password)
             except auth.AuthError as e:
-                return RedirectResponse(f"/login?error={_q(str(e))}", status_code=303)
+                return _login_page(request, c, ticket=ticket, error=str(e))
             setup_code.burn()
             auth.event(c, "admin_created", username.strip(), _ip(request), "with the setup code")
         finally:

@@ -32,6 +32,10 @@ COPY pyproject.toml README.md LICENSE NOTICE ./
 COPY deedoop ./deedoop
 RUN pip install --no-cache-dir -e '.[dev]'
 COPY tests ./tests
+# The Unraid template tests read these (test stage only; the image does not get them).
+COPY Dockerfile ./
+COPY unraid ./unraid
+COPY docs/install-unraid.md ./docs/
 # Not root, like the image, so permission tests behave as they do on Unraid.
 RUN chown -R 99:100 /src
 USER 99:100

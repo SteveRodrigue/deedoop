@@ -1,4 +1,7 @@
 <?xml version="1.0"?>
+<!-- Unraid template for a private install (not submitted to Community Applications).
+     Copy to /boot/config/plugins/dockerMan/templates-user/my-deedoop.xml.
+     See docs/install-unraid.md. -->
 <Container version="2">
   <Name>deedoop</Name>
   <Repository>ghcr.io/steverodrigue/deedoop:latest</Repository>
@@ -8,10 +11,11 @@
   <Privileged>false</Privileged>
   <Support>https://github.com/SteveRodrigue/deedoop/issues</Support>
   <Project>https://github.com/SteveRodrigue/deedoop</Project>
+  <ReadMe>https://github.com/SteveRodrigue/deedoop/blob/main/docs/install-unraid.md</ReadMe>
   <Overview>deedoop: dedupe your hoard, safely. Finds duplicate files across your Unraid disks by content, whatever their names, and photos that differ only in their metadata. Read-only by default: to let it move duplicates to a quarantine or apply your plans, set /mnt to read/write, sign in as the admin and turn on changes in its Setup screen. Signed out, deedoop never changes anything. On first start, open the container's Logs for the one-time setup code that creates the admin account (or set the admin password below).</Overview>
   <Category>Tools: Backup:</Category>
   <WebUI>http://[IP]:[PORT:8080]/</WebUI>
-  <Icon>https://raw.githubusercontent.com/SteveRodrigue/deedoop/main/deedoop/web/static/icon.svg</Icon>
+  <Icon>https://raw.githubusercontent.com/SteveRodrigue/deedoop/main/unraid/deedoop-icon.png</Icon>
   <ExtraParams>--user 99:100 --read-only --tmpfs /tmp --cap-drop=ALL --security-opt=no-new-privileges</ExtraParams>
   <Config Name="Web UI port" Target="8080" Default="8080" Mode="tcp" Description="Port for the web UI" Type="Port" Display="always" Required="true" Mask="false">8080</Config>
   <Config Name="Disks and shares" Target="/mnt" Default="/mnt" Mode="ro,slave" Description="Host /mnt. Read-only by default. Set it to Read/Write - Slave only if you want deedoop to remove duplicates or apply plans (also turn on changes in its Setup screen)." Type="Path" Display="always" Required="true" Mask="false">/mnt</Config>

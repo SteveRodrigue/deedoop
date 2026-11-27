@@ -243,3 +243,14 @@ def test_read_only_mnt_is_flagged_when_changes_are_allowed(unraid, monkeypatch):
         db.set_settings(c, {"allow_changes": False})
         c.close()
         assert 'id="mnt-readonly"' not in client.get("/").text
+
+
+def test_first_run_form_says_where_the_setup_code_is(unraid):
+    with TestClient(create_app(unraid, start_worker=False)) as client:
+        page = client.get("/login").text
+    step = page[page.index("Enter the setup code"):page.index("</form>")]
+    assert "step 1 of 2" in step
+    assert "<strong>Logs</strong>" in step
+    assert "docker logs deedoop" in step
+    assert 'name="password"' not in page
+    assert page.index("Create the admin account</h2>") < page.index("<h2>Status</h2>")

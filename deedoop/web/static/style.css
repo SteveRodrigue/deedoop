@@ -207,6 +207,11 @@ table.plan .to { color: var(--ink); font-weight: 500; }
 .account { display: inline-flex; align-items: center; gap: 8px; margin: 0; }
 .account-link { white-space: nowrap; font-size: 14px; }
 .login { max-width: 460px; margin: 0 auto; }
+.login .step-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 18px 0 8px; padding-top: 14px; border-top: 1px solid var(--line); font-size: 15px; }
+.login .step-title .small { margin-left: auto; font-weight: 400; }
+.login .step-no { display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: var(--accent); color: var(--accent-ink); font-size: 13px; }
+.login ol.steps { margin: 6px 0 10px; padding-left: 22px; }
+.login ol.steps li { margin: 4px 0; }
 .stack { display: grid; gap: 10px; }
 .stack label { display: grid; gap: 4px; }
 .stack input[type=text], .stack input[type=password] { width: 100%; box-sizing: border-box; }
