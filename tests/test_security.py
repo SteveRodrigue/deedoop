@@ -172,6 +172,16 @@ def test_templates_escape_and_have_no_inline_script():
         assert not scripts or f.name == "base.html", f"{f.name}: inline <script>"
 
 
+def test_sc6_toast_text_from_the_address_is_escaped(unraid):
+    # Save confirmations repeat text from the redirect's query string: it must stay text.
+    bad = '<img src=x onerror="alert(1)">'
+    with make_client(unraid) as client:
+        for url in ("/changes?msg=", "/changes?error=", "/duplicates?msg=", "/setup?error=", "/review?msg="):
+            r = client.get(url + bad)
+            assert bad not in r.text, url
+            assert "&lt;img src=x onerror=" in r.text, url
+
+
 def test_security_headers(unraid):
     with make_client(unraid, signed_in=False) as client:
         r = client.get("/login")
@@ -274,25 +284,56 @@ def test_sessions_expire(conn):
     assert auth.load_session(conn, "not a token") is None
 
 
+def _ticket(page: str) -> str:
+    return re.search(r'name="ticket" value="([^"]+)"', page).group(1)
+
+
 def test_first_run_needs_the_setup_code_from_the_log(unraid, caplog):
     with TestClient(create_app(unraid, start_worker=False)) as client:
         r = client.get("/login")
         assert "Create the admin account" in r.text
+        assert 'name="password"' not in r.text  # the account form waits for the code
         code = client.app.state.setup_code.current()
         assert code in caplog.text
-        r = client.post("/first-run", data={"code": "AAAA-BBBB-CCCC-DDDD", "username": "admin",
-                                            "password": TEST_PASSWORD, "password2": TEST_PASSWORD})
-        assert "setup code is wrong" in r.text
-        r = client.post("/first-run", data={"code": code.lower().replace("-", " "), "username": "steve",
+        r = client.post("/first-run", data={"code": "AAAA-BBBB-CCCC-DDDD"})
+        assert "setup code is wrong" in r.text and 'name="password"' not in r.text
+        r = client.post("/first-run", data={"code": code.lower().replace("-", " ")})
+        assert 'name="password"' in r.text
+        assert code not in r.text  # SC8: the page carries a ticket, not the code
+        ticket = _ticket(r.text)
+        r = client.post("/first-run", data={"ticket": ticket, "username": "steve",
                                             "password": TEST_PASSWORD, "password2": TEST_PASSWORD})
         assert r.status_code == 200 and "steve" in r.text  # signed in, on Setup
         c = db.connect(unraid.db_path)
         assert c.execute("SELECT username FROM users").fetchall()[0][0] == "steve"
         c.close()
-        # A second admin cannot be created, even with a valid code.
-        r = client.post("/first-run", data={"code": code, "username": "x", "password": TEST_PASSWORD,
-                                            "password2": TEST_PASSWORD}, follow_redirects=False)
-        assert r.headers["location"] == "/login"
+        # A second admin cannot be created, even with a valid code or the old ticket.
+        for data in ({"code": code}, {"ticket": ticket}):
+            r = client.post("/first-run", data={**data, "username": "x", "password": TEST_PASSWORD,
+                                                "password2": TEST_PASSWORD}, follow_redirects=False)
+            assert r.headers["location"] == "/login"
+
+
+def test_first_run_account_form_needs_a_ticket_from_a_right_code(unraid):
+    """SC1: the user name and password step cannot be posted without passing the
+    setup code step first, and only the latest ticket works."""
+    with TestClient(create_app(unraid, start_worker=False)) as client:
+        code = client.app.state.setup_code.current()
+        account = {"username": "x", "password": TEST_PASSWORD, "password2": TEST_PASSWORD}
+        for ticket in ("", "forged-ticket"):
+            r = client.post("/first-run", data={"ticket": ticket, **account}, follow_redirects=False)
+            assert r.status_code == 303 and r.headers["location"].startswith("/login?error=")
+        old = _ticket(client.post("/first-run", data={"code": code}).text)
+        new = _ticket(client.post("/first-run", data={"code": code}).text)
+        r = client.post("/first-run", data={"ticket": old, **account}, follow_redirects=False)
+        assert r.status_code == 303 and r.headers["location"].startswith("/login?error=")
+        c = db.connect(unraid.db_path)
+        assert c.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0
+        c.close()
+        r = client.post("/first-run", data={"ticket": new, **{**account, "password2": "different-" + TEST_PASSWORD}})
+        assert "two passwords are different" in r.text and 'name="ticket"' in r.text  # stays on step 2
+        r = client.post("/first-run", data={"ticket": new, **account}, follow_redirects=False)
+        assert r.status_code == 303
 
 
 def test_dangerous_settings_ask_for_the_password_again(unraid):
@@ -306,7 +347,7 @@ def test_dangerous_settings_ask_for_the_password_again(unraid):
         assert db.get_settings(c)["allow_changes"] is False
         c.close()
         r = client.post("/setup/changes", data={"allow_changes": "1", "password": TEST_PASSWORD})
-        assert "Saved" in r.text
+        assert "Change settings saved" in r.text  # the toast names what was saved
         c = db.connect(unraid.db_path)
         assert db.get_settings(c)["allow_changes"] is True
         c.close()

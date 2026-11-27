@@ -208,19 +208,22 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
                 "last_scan": last["finished_at"] if last else None, "last_state": last["state"] if last else "",
                 "files": st.get("files", 0), "groups": st.get("groups", 0), "wasted": st.get("total_wasted", 0)}
 
+    def _login_page(request: Request, c, *, next: str = "/", error: str = "", ticket: str = ""):
+        first_run = not auth.has_admin(c)
+        if first_run and not ticket:
+            setup_code.current()  # makes sure a valid code is in the log
+        return templates.TemplateResponse(request, "login.html", {
+            "nav": "login", "next": safe_next(next), "error": error, "first_run": first_run,
+            "ticket": ticket, "status": public_status(c), "public_view": request.state.public_view,
+            "gate": {"open": False}})
+
     @app.get("/login", response_class=HTMLResponse)
     def login_page(request: Request, next: str = "/", error: str = ""):
         if request.state.session is not None:
             return RedirectResponse(safe_next(next), status_code=303)
         c = conn()
         try:
-            first_run = not auth.has_admin(c)
-            if first_run:
-                setup_code.current()  # makes sure a valid code is in the log
-            return templates.TemplateResponse(request, "login.html", {
-                "nav": "login", "next": safe_next(next), "error": error, "first_run": first_run,
-                "status": public_status(c), "public_view": request.state.public_view,
-                "gate": {"open": False}})
+            return _login_page(request, c, next=next, error=error)
         finally:
             c.close()
 
@@ -240,31 +243,43 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
 
     @app.post("/first-run")
     def first_run(request: Request, code: Annotated[str, Form(max_length=64)] = "",
+                  ticket: Annotated[str, Form(max_length=128)] = "",
                   username: Annotated[str, Form(max_length=64)] = "admin",
                   password: Annotated[str, Form(max_length=auth.MAX_PASSWORD)] = "",
                   password2: Annotated[str, Form(max_length=auth.MAX_PASSWORD)] = ""):
+        """Two steps. 1: the setup code from the log; a right one returns the
+        account form with a ticket. 2: the ticket, user name and password."""
         c = conn()
         try:
             if auth.has_admin(c):
                 return RedirectResponse("/login", status_code=303)
-            # Wrong codes are throttled like wrong passwords.
+            # Wrong codes and tickets are throttled like wrong passwords.
             wait = auth.lockout_remaining(c, _ip(request))
             if wait:
                 return RedirectResponse(f"/login?error={_q('Too many wrong setup codes. Try again later.')}",
                                         status_code=303)
-            if not setup_code.check(code):
+            if not ticket:
+                if not setup_code.check(code):
+                    try:
+                        auth.authenticate(c, "(setup code)", "", _ip(request))
+                    except auth.AuthError:
+                        pass
+                    return RedirectResponse(f"/login?error={_q('That setup code is wrong or has expired. The current code is in the container log.')}",
+                                            status_code=303)
+                return _login_page(request, c, ticket=setup_code.issue_ticket())
+            if not setup_code.check_ticket(ticket):
                 try:
                     auth.authenticate(c, "(setup code)", "", _ip(request))
                 except auth.AuthError:
                     pass
-                return RedirectResponse(f"/login?error={_q('That setup code is wrong or has expired. The current code is in the container log.')}",
+                return RedirectResponse(f"/login?error={_q('That step took too long. Enter the setup code again.')}",
                                         status_code=303)
             if password != password2:
-                return RedirectResponse(f"/login?error={_q('The two passwords are different.')}", status_code=303)
+                return _login_page(request, c, ticket=ticket, error="The two passwords are different.")
             try:
                 uid = auth.create_admin(c, username, password)
             except auth.AuthError as e:
-                return RedirectResponse(f"/login?error={_q(str(e))}", status_code=303)
+                return _login_page(request, c, ticket=ticket, error=str(e))
             setup_code.burn()
             auth.event(c, "admin_created", username.strip(), _ip(request), "with the setup code")
         finally:
@@ -541,7 +556,7 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
         finally:
             c.close()
         worker.wake()
-        return RedirectResponse("/setup#benchmark", status_code=303)
+        return RedirectResponse("/setup?saved=bench_started#benchmark", status_code=303)
 
     @app.post("/setup/benchmark/apply")
     def setup_benchmark_apply():
@@ -688,7 +703,7 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
                             content_disposition_type="inline")
 
     @app.get("/review", response_class=HTMLResponse)
-    def review(request: Request, view: str = "queue", done: str = "", kind: str = "photos"):
+    def review(request: Request, view: str = "queue", done: str = "", kind: str = "photos", msg: str = ""):
         c = conn()
         try:
             s = db.get_settings(c)
@@ -703,13 +718,13 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
                         side["play"] = side["ext"] in PLAYABLE
                 return render(request, "review_media.html", pairs=pairs, view="decided" if decided else "queue",
                               counts=media_counts, photo_counts=similar.counts(c, t), settings=s,
-                              decisions=media_similar.DECISIONS, done=done,
+                              decisions=media_similar.DECISIONS, done=done, msg=msg,
                               media_on="media_similar" in scanners.methods(s))
             pairs = [p for p in (queries.pair_view(c, r) for r in similar.queue(c, t, decided=decided,
                                                                                   limit=100 if decided else 2)) if p]
             return render(request, "review.html", pairs=pairs, view="decided" if decided else "queue",
                           counts=similar.counts(c, t), threshold=t, settings=s, decisions=similar.DECISIONS,
-                          done=done, max_distance=similar.MAX_DISTANCE, media_counts=media_counts)
+                          done=done, msg=msg, max_distance=similar.MAX_DISTANCE, media_counts=media_counts)
         finally:
             c.close()
 
@@ -734,7 +749,7 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
             media_similar.rebuild_groups(c)
         finally:
             c.close()
-        return RedirectResponse("/review?kind=media&view=decided", status_code=303)
+        return RedirectResponse(_with_msg("/review?kind=media&view=decided", "Decision undone"), status_code=303)
 
     @app.get("/poster/{file_id}")
     def poster(file_id: int):
@@ -790,7 +805,7 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
             similar.rebuild_similar_groups(c, threshold_of(db.get_settings(c)))
         finally:
             c.close()
-        return RedirectResponse("/review?view=decided", status_code=303)
+        return RedirectResponse(_with_msg("/review?view=decided", "Decision undone"), status_code=303)
 
     @app.post("/review/threshold")
     def review_threshold(threshold: int = Form(...), view: str = Form("queue")):
@@ -802,7 +817,8 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
             refresh_coverage(c, t)
         finally:
             c.close()
-        return RedirectResponse(f"/review?view={'decided' if view == 'decided' else 'queue'}", status_code=303)
+        return RedirectResponse(_with_msg(f"/review?view={'decided' if view == 'decided' else 'queue'}",
+                                          f"Match closeness set to {t}"), status_code=303)
 
     @app.get("/archives", response_class=HTMLResponse)
     def archives_page(request: Request):
@@ -990,7 +1006,7 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
             changes.unmark_group(c, group_id)
         finally:
             c.close()
-        return RedirectResponse(_back(back), status_code=303)
+        return RedirectResponse(_with_msg(_back(back), "Marks cleared for this group"), status_code=303)
 
     @app.post("/marks/bulk")
     def marks_bulk(method: str = Form("exact"), category: str = Form(""), q: str = Form(""), min_mb: Annotated[float, Form(ge=0, le=1e9)] = 0,
@@ -1027,7 +1043,8 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
             changes.clear_marks(c, None if everything else (file_id or []))
         finally:
             c.close()
-        return RedirectResponse("/changes", status_code=303)
+        return RedirectResponse(_with_msg("/changes", "All marks cleared" if everything else "Kept: no longer marked"),
+                                status_code=303)
 
     @app.get("/changes", response_class=HTMLResponse)
     def changes_page(request: Request, page: Page = 1, msg: str = "", error: str = ""):

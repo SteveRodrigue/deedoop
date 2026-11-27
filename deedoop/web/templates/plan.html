@@ -1,14 +1,18 @@
 {% extends "base.html" %}
+{% from "_toast.html" import toast %}
 {% from "_plan_macros.html" import item_row, folder_table %}
 {% block title %}{{ p.name }} · deedoop{% endblock %}
+{% block toasts %}
+{% if saved %}{{ toast("Plan saved. Nothing was moved: apply it below when you are ready.") }}{% endif %}
+{% if error %}{{ toast(error, "err") }}{% endif %}
+{% if checked == "0" %}{{ toast("Checked against the index: every file is unchanged.") }}
+{% elif checked != "" %}{{ toast(checked ~ " files changed or disappeared since the plan was saved. They are marked and will not be applied.", "err") }}{% endif %}
+{% endblock %}
 {% block content %}
 <nav class="tabs">
   <a href="/reorganize">New plan</a>
   <a href="/plans" class="on">Saved plans</a>
 </nav>
-{% if saved %}<p class="flash ok">Plan saved. Nothing was moved: apply it below when you are ready.</p>{% endif %}
-{% if error %}<p class="flash err">{{ error }}</p>{% endif %}
-{% if checked != "" %}<p class="flash {{ 'ok' if checked == '0' else 'err' }}">{% if checked == "0" %}Checked against the index: every file is unchanged.{% else %}{{ checked }} files changed or disappeared since the plan was saved. They are marked and will not be applied.{% endif %}</p>{% endif %}
 <section class="card">
   <div class="row between">
     <h2 style="margin:0;overflow-wrap:anywhere">{{ p.name }}</h2>

@@ -1,5 +1,7 @@
 {% extends "base.html" %}
+{% from "_toast.html" import toast %}
 {% block title %}Duplicates · deedoop{% endblock %}
+{% block toasts %}{% if msg %}{{ toast(msg) }}{% endif %}{% endblock %}
 {% block content %}
 <nav class="tabs">
   {% for key, label in methods.items() %}
@@ -8,7 +10,6 @@
   {% endfor %}
 </nav>
 
-{% if msg %}<p class="flash ok">{{ msg }}</p>{% endif %}
 {% if marks.files %}
 <section class="card callout row between">
   <span><strong>{{ "{:,}".format(marks.files) }}</strong> {{ "copy" if marks.files == 1 else "copies" }} marked for removal, {{ marks.bytes | bytes }}.
