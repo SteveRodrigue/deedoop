@@ -190,7 +190,9 @@ details.group .path { flex: 1; }
 button.danger { background: transparent; color: var(--err); border: 1px solid var(--err); }
 .c-similar { background: var(--similar); }
 .thumb.xs { width: 56px; height: 56px; }
-/* reorganisation plans */
+/* Organize tab (reorganisation plans) */
+.plan-form .row > label { max-width: 100%; box-sizing: border-box; }  /* long share names stay inside the card on a phone */
+.plan-form .row > label select { max-width: 100%; box-sizing: border-box; }
 .plan-form input.rule { display: block; width: 100%; box-sizing: border-box; margin-top: 4px; font-size: 14px; padding: 8px 10px; }
 .presets { margin-top: 6px; }
 .presets a { border: 1px solid var(--line); border-radius: 999px; padding: 1px 10px; }

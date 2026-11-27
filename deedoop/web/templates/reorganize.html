@@ -1,16 +1,16 @@
 {% extends "base.html" %}
 {% from "_plan_macros.html" import item_row, folder_table %}
-{% block title %}Plan a reorganisation · deedoop{% endblock %}
+{% block title %}Organize files · deedoop{% endblock %}
 {% block content %}
 <nav class="tabs">
-  <a href="/reorganize" class="on">New plan</a>
+  <a href="/reorganize" class="on">Organize files</a>
   <a href="/plans">Saved plans</a>
 </nav>
 {% if not locs %}
 <section class="card"><p class="muted">Nothing indexed yet. Pick shares on <a href="/setup">Setup</a> and run a scan.</p></section>
 {% else %}
 <section class="card">
-  <p style="margin-top:0">Pick a rule and see where every file would go. <strong>This is a preview:</strong> nothing is moved.
+  <p style="margin-top:0">Move files into a tidy folder layout. Pick a rule and see where every file would go. <strong>This is a preview:</strong> nothing is moved.
     Save the plan, then apply it from the plan's page after you confirm it there.</p>
   <form method="get" action="/reorganize" class="plan-form">
     {% for k, v in source.items() if k not in ("loc", "dir") and v %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
