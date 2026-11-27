@@ -197,8 +197,9 @@ def test_theme_toggle_is_on_every_page(unraid):
 def test_first_run_form_says_where_the_setup_code_is(unraid):
     with TestClient(create_app(unraid, start_worker=False)) as client:
         page = client.get("/login").text
-    form = page[page.index('action="/first-run"'):page.index("</form>")]
-    assert 'aria-describedby="setup-code-help"' in form
-    assert "Logs" in form
-    assert "docker logs deedoop" in form
+    step = page[page.index("Enter the setup code"):page.index("</form>")]
+    assert "step 1 of 2" in step
+    assert "<strong>Logs</strong>" in step
+    assert "docker logs deedoop" in step
+    assert 'name="password"' not in page
     assert page.index("Create the admin account</h2>") < page.index("<h2>Status</h2>")

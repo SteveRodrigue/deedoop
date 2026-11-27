@@ -96,14 +96,15 @@ read-only root filesystem, a private `/tmp`, no Linux capabilities and
 
 ## 7. Create the admin account
 
-1. Get the one-time setup code from the container log: on the **Docker** tab,
-   click the deedoop icon > **Logs**, and copy the code from the line
+1. Open `http://<server>:8080` (`https://` if you turned HTTPS on). deedoop
+   asks for a **setup code**.
+2. Get it from the container log: on the **Docker** tab, click the deedoop
+   icon > **Logs**, and copy the code at the end of the line
    `deedoop has no admin account yet. … setup code: XXXX-XXXX-XXXX-XXXX`.
    Or in the terminal: `docker logs deedoop 2>&1 | grep "setup code" | tail -1`.
-   A code lasts 60 minutes; reload the sign-in page after that and a new one
-   appears in the log.
-2. Open `http://<server>:8080` (`https://` if you turned HTTPS on), enter the
-   code and create the admin account.
+3. Enter the code and click **Continue**. A code lasts 60 minutes; after that,
+   reload the page and a new one is written to the log.
+4. Choose your user name and password, and click **Create the admin account**.
 
 (Or fill **Admin password (first run only)** in step 6, and remove it once you
 have signed in.)
