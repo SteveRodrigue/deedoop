@@ -488,7 +488,7 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
         finally:
             c.close()
         worker.wake()
-        return RedirectResponse("/setup#benchmark", status_code=303)
+        return RedirectResponse("/setup?saved=bench_started#benchmark", status_code=303)
 
     @app.post("/setup/benchmark/apply")
     def setup_benchmark_apply():
@@ -635,7 +635,7 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
                             content_disposition_type="inline")
 
     @app.get("/review", response_class=HTMLResponse)
-    def review(request: Request, view: str = "queue", done: str = "", kind: str = "photos"):
+    def review(request: Request, view: str = "queue", done: str = "", kind: str = "photos", msg: str = ""):
         c = conn()
         try:
             s = db.get_settings(c)
@@ -650,13 +650,13 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
                         side["play"] = side["ext"] in PLAYABLE
                 return render(request, "review_media.html", pairs=pairs, view="decided" if decided else "queue",
                               counts=media_counts, photo_counts=similar.counts(c, t), settings=s,
-                              decisions=media_similar.DECISIONS, done=done,
+                              decisions=media_similar.DECISIONS, done=done, msg=msg,
                               media_on="media_similar" in scanners.methods(s))
             pairs = [p for p in (queries.pair_view(c, r) for r in similar.queue(c, t, decided=decided,
                                                                                   limit=100 if decided else 2)) if p]
             return render(request, "review.html", pairs=pairs, view="decided" if decided else "queue",
                           counts=similar.counts(c, t), threshold=t, settings=s, decisions=similar.DECISIONS,
-                          done=done, max_distance=similar.MAX_DISTANCE, media_counts=media_counts)
+                          done=done, msg=msg, max_distance=similar.MAX_DISTANCE, media_counts=media_counts)
         finally:
             c.close()
 
@@ -681,7 +681,7 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
             media_similar.rebuild_groups(c)
         finally:
             c.close()
-        return RedirectResponse("/review?kind=media&view=decided", status_code=303)
+        return RedirectResponse(_with_msg("/review?kind=media&view=decided", "Decision undone"), status_code=303)
 
     @app.get("/poster/{file_id}")
     def poster(file_id: int):
@@ -737,7 +737,7 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
             similar.rebuild_similar_groups(c, threshold_of(db.get_settings(c)))
         finally:
             c.close()
-        return RedirectResponse("/review?view=decided", status_code=303)
+        return RedirectResponse(_with_msg("/review?view=decided", "Decision undone"), status_code=303)
 
     @app.post("/review/threshold")
     def review_threshold(threshold: int = Form(...), view: str = Form("queue")):
@@ -749,7 +749,8 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
             refresh_coverage(c, t)
         finally:
             c.close()
-        return RedirectResponse(f"/review?view={'decided' if view == 'decided' else 'queue'}", status_code=303)
+        return RedirectResponse(_with_msg(f"/review?view={'decided' if view == 'decided' else 'queue'}",
+                                          f"Match closeness set to {t}"), status_code=303)
 
     @app.get("/archives", response_class=HTMLResponse)
     def archives_page(request: Request):
@@ -937,7 +938,7 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
             changes.unmark_group(c, group_id)
         finally:
             c.close()
-        return RedirectResponse(_back(back), status_code=303)
+        return RedirectResponse(_with_msg(_back(back), "Marks cleared for this group"), status_code=303)
 
     @app.post("/marks/bulk")
     def marks_bulk(method: str = Form("exact"), category: str = Form(""), q: str = Form(""), min_mb: Annotated[float, Form(ge=0, le=1e9)] = 0,
@@ -974,7 +975,8 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
             changes.clear_marks(c, None if everything else (file_id or []))
         finally:
             c.close()
-        return RedirectResponse("/changes", status_code=303)
+        return RedirectResponse(_with_msg("/changes", "All marks cleared" if everything else "Kept: no longer marked"),
+                                status_code=303)
 
     @app.get("/changes", response_class=HTMLResponse)
     def changes_page(request: Request, page: Page = 1, msg: str = "", error: str = ""):

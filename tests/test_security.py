@@ -172,6 +172,16 @@ def test_templates_escape_and_have_no_inline_script():
         assert not scripts or f.name == "base.html", f"{f.name}: inline <script>"
 
 
+def test_sc6_toast_text_from_the_address_is_escaped(unraid):
+    # Save confirmations repeat text from the redirect's query string: it must stay text.
+    bad = '<img src=x onerror="alert(1)">'
+    with make_client(unraid) as client:
+        for url in ("/changes?msg=", "/changes?error=", "/duplicates?msg=", "/setup?error=", "/review?msg="):
+            r = client.get(url + bad)
+            assert bad not in r.text, url
+            assert "&lt;img src=x onerror=" in r.text, url
+
+
 def test_security_headers(unraid):
     with make_client(unraid, signed_in=False) as client:
         r = client.get("/login")
@@ -306,7 +316,7 @@ def test_dangerous_settings_ask_for_the_password_again(unraid):
         assert db.get_settings(c)["allow_changes"] is False
         c.close()
         r = client.post("/setup/changes", data={"allow_changes": "1", "password": TEST_PASSWORD})
-        assert "Saved" in r.text
+        assert "Change settings saved" in r.text  # the toast names what was saved
         c = db.connect(unraid.db_path)
         assert db.get_settings(c)["allow_changes"] is True
         c.close()
