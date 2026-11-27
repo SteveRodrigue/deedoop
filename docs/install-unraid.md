@@ -65,15 +65,24 @@ sign in, update, done. If you would rather stay signed in, see
 
 ## 3. Add the template
 
+Still in the **Unraid terminal** from step 2 (the `>_` icon, or SSH), run:
+
 ```sh
 wget -O /boot/config/plugins/dockerMan/templates-user/my-deedoop.xml \
   https://raw.githubusercontent.com/SteveRodrigue/deedoop/main/unraid/deedoop.xml
 ```
 
-(Or copy [`unraid/deedoop.xml`](../unraid/deedoop.xml) there through the
-`flash` share as `config/plugins/dockerMan/templates-user/my-deedoop.xml`.)
+This saves the template on the server's flash drive, where the Docker tab
+looks for templates. That is the last terminal command: step 4 happens in the
+web UI.
+
+(Or, without the terminal, copy [`unraid/deedoop.xml`](../unraid/deedoop.xml)
+there through the `flash` share as
+`config/plugins/dockerMan/templates-user/my-deedoop.xml`.)
 
 ## 4. Create the container
+
+Back in the Unraid **web UI**:
 
 1. **Docker** tab > **Add Container**, then pick **deedoop** in the **Template**
    list.
