@@ -24,11 +24,21 @@ class JobProblem(Exception):
 
 
 class Control:
-    def __init__(self) -> None:
-        self._running = threading.Event()
+    """Pause and stop switches for a job. With a multiprocessing context the
+    switches are shared with the job's own process (``worker.py`` runs jobs
+    there, so a scan never slows the web pages down)."""
+
+    def __init__(self, ctx: Any = None) -> None:
+        make = ctx.Event if ctx is not None else threading.Event
+        self._running = make()
         self._running.set()
-        self._stop = threading.Event()
-        self.stop_reason = ""
+        self._stop = make()
+        self._reason = ctx.Array("c", 128) if ctx is not None else None
+        self._local_reason = ""
+
+    @property
+    def stop_reason(self) -> str:
+        return self._reason.value.decode("utf-8", "replace") if self._reason is not None else self._local_reason
 
     @property
     def paused(self) -> bool:
@@ -41,7 +51,10 @@ class Control:
         self._running.set()
 
     def stop(self, reason: str = "stopped") -> None:
-        self.stop_reason = reason
+        if self._reason is not None:
+            self._reason.value = reason.encode()[:127]
+        else:
+            self._local_reason = reason
         self._stop.set()
         self._running.set()
 
@@ -99,7 +112,11 @@ class Status:
                 now = time.time()
                 prev, began = self._data.get("phase"), self._data.get("phase_active", 0.0)
                 if prev and prev != "starting":
-                    self._add_log(now, "info", f"{phase_name(prev)}: finished in {fmt_seconds(self._active(now) - began)}")
+                    took = self._active(now) - began
+                    self._add_log(now, "info", f"{phase_name(prev)}: finished in {fmt_seconds(took)}")
+                    # Kept with the job, so the next scan can say how long this phase took last time.
+                    times = self._data.setdefault("phase_times", {})
+                    times[prev] = round(times.get(prev, 0.0) + took, 1)
                 if phase != "done":
                     self._add_log(now, "info", f"{phase_name(phase)}")
                 kw = {**kw, "phase_started": now, "phase_active": self._active(now)}
@@ -128,6 +145,26 @@ class Status:
             elif not on and since:
                 self._data["paused_total"] = self._data.get("paused_total", 0.0) + now - since
                 self._data["paused_since"] = None
+
+    # -- a job in its own process (worker.py) ---------------------------------------
+
+    def raw(self) -> dict[str, Any]:
+        """The progress tree as it is, for the web process's copy."""
+        with self._lock:
+            return copy.deepcopy(self._data)
+
+    def log_since(self, n: int) -> tuple[list[tuple[float, str, str]], int]:
+        """Log lines added after the first ``n``, and the new count."""
+        with self._lock:
+            return list(self._log[n:]), len(self._log)
+
+    def mirror(self, data: dict[str, Any], lines: list[tuple[float, str, str]]) -> None:
+        """Take the progress and new log lines sent by the job's process."""
+        with self._lock:
+            if data:
+                self._data = data
+            for at, level, message in lines:
+                self._add_log(at, level, message)
 
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
@@ -238,7 +275,7 @@ ETA_LIVE_SECONDS = 3        # ... or this long, when the live speed is known
 ETA_MIN_FRACTION = 0.01     # ... and done 1% of its work
 
 
-def progress_view(live: dict, now: float, last_walked: int = 0) -> dict:
+def progress_view(live: dict, now: float, last_walked: int = 0, last_times: dict | None = None) -> dict:
     """Phase x of y, how far the current phase is, and a rough ETA for it.
 
     The ETA is the phase's working time so far (pauses left out) scaled by the
@@ -281,6 +318,9 @@ def progress_view(live: dict, now: float, last_walked: int = 0) -> dict:
             out["eta"] = "about " + fmt_seconds((todo - done) / rate) + " left"
         elif spent >= ETA_MIN_SECONDS and frac >= ETA_MIN_FRACTION and done < todo:
             out["eta"] = "about " + fmt_seconds(spent * (todo - done) / done) + " left"
+    # how long this phase took in the last scan: a rough guide while the ETA has nothing to go on
+    took = (last_times or {}).get(phase)
+    out["last_took"] = fmt_seconds(took) if took else ""
     # whole-plan bar: each phase one segment
     no = out["phase_no"]
     out["segments"] = [{"name": phase_name(p), "state": "done" if i + 1 < no else "now" if i + 1 == no else "todo"}

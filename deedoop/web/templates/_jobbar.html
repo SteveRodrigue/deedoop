@@ -1,0 +1,16 @@
+{# The running job on every page but the dashboard (whose scan card shows it all): polled every 2 s while a job runs, gone when it ends. No paths here: signed-out visitors may see it. #}
+<div id="jobbar" class="jobbar{% if not jobbar %} idle{% endif %}" role="status" aria-live="polite"
+     {% if jobbar %}hx-get="/partials/jobbar" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>
+{% if jobbar %}{% set pv = jobbar.pv %}
+  <span class="pill {{ 'warn' if jobbar.paused else 'ok' }}">{{ "paused" if jobbar.paused else "running" if jobbar.running else "queued" }}</span>
+  <strong>{{ jobbar.name }} #{{ jobbar.id }}</strong>
+  {% if pv.phase_no %}<span>Phase {{ pv.phase_no }} of {{ pv.phase_count }}: {{ pv.phase_name }}</span>{% elif pv.phase_name %}<span>{{ pv.phase_name }}</span>{% endif %}
+  {% if pv.pct is not none and pv.pct is defined %}<progress max="100" value="{{ pv.pct }}" aria-label="This phase"></progress><span>{{ pv.pct }}%</span>
+  {% elif pv.done %}<span>{{ "{:,}".format(pv.done) }} files</span>{% endif %}
+  {% if pv.unit == "bytes" and pv.rate_bytes >= 1024 %}<span class="muted">{{ pv.rate_bytes | bytes }}/s</span>
+  {% elif pv.rate_files and pv.rate_files >= 1 %}<span class="muted">{{ "{:,}".format(pv.rate_files | round | int) }} files/s</span>{% endif %}
+  {% if pv.eta %}<span class="muted">{{ pv.eta }}</span>{% endif %}
+  {% if jobbar.queued_scan %}<span class="muted">· scan #{{ jobbar.queued_scan }} next</span>{% endif %}
+  <a class="jobbar-link" href="/">Details</a>
+{% endif %}
+</div>

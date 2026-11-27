@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 import deedoop.web as web
 from deedoop import db, queries
 from deedoop.benchmark import BenchConfig
-from deedoop.control import Status, progress_view
+from deedoop.control import Status, fmt_seconds, progress_view
 from deedoop.web.app import create_app
 from deedoop.worker import Worker
 from tests.conftest import ensure_admin, sign_in, write
@@ -126,3 +126,192 @@ def test_appdata_size_counts_thumbnails_too(unraid):
     assert total >= 4096 + os.path.getsize(unraid.db_path)
     with make_client(unraid) as client:
         assert "All appdata:" in client.get("/").text
+
+
+# -- the UI stays quick while a scan runs (found live: pages took 10 s mid-scan) -----------
+
+
+def test_jobs_run_in_their_own_process_and_report_back(unraid):
+    import multiprocessing
+
+    for i in range(30):
+        write(unraid.mnt / f"disk1/Photos/f{i}.bin", b"same" if i % 2 else os.urandom(64))
+    ensure_admin(unraid)
+    worker = Worker(unraid, BenchConfig(), isolate=True)
+    with TestClient(create_app(unraid, worker=worker)) as client:
+        sign_in(client, unraid)
+        client.post("/setup/shares", data={"share": ["Photos"]})
+        client.post("/scan/start")
+        deadline = time.time() + 60
+        seen_child = False
+        while time.time() < deadline and jobs(unraid)[-1]["state"] in ("queued", "running"):
+            seen_child |= any(p.name.startswith("deedoop-job-") for p in multiprocessing.active_children())
+            time.sleep(0.05)
+        (job,) = jobs(unraid)
+        assert job["state"] == "done", job
+        assert seen_child
+        log = client.get(f"/log?job={job['id']}").text
+        assert "Walking folders: finished in" in log and "Finished in" in log  # lines from the job's process
+        c = db.connect(unraid.db_path)
+        prog = json.loads(c.execute("SELECT progress FROM jobs").fetchone()[0])
+        groups = c.execute("SELECT COUNT(*) FROM groups WHERE method = 'exact'").fetchone()[0]
+        c.close()
+        assert prog["result"]["groups"] == groups == 1
+        assert "walk" in prog["phase_times"]
+        assert "took" in client.get("/").text
+
+
+def test_a_job_process_that_dies_is_recorded_as_failed(unraid):
+    import multiprocessing
+
+    for i in range(20):
+        write(unraid.mnt / f"disk1/Photos/f{i}.bin", os.urandom(64))
+    ensure_admin(unraid)
+    worker = Worker(unraid, BenchConfig(), isolate=True)
+    with TestClient(create_app(unraid, worker=worker)) as client:
+        sign_in(client, unraid)
+        client.post("/setup/shares", data={"share": ["Photos"]})
+        client.post("/scan/start")
+        client.post("/scan/pause")  # holds the scan at its first checkpoint
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            kids = [p for p in multiprocessing.active_children() if p.name.startswith("deedoop-job-")]
+            if kids:
+                kids[0].kill()  # as the kernel's out-of-memory killer would
+                break
+            time.sleep(0.05)
+        assert kids
+        while time.time() < deadline and jobs(unraid)[-1]["state"] in ("queued", "running"):
+            time.sleep(0.05)
+        (job,) = jobs(unraid)
+        assert job["state"] == "failed" and "ended unexpectedly" in job["error"]
+        assert "No scan yet" not in client.get("/").text
+
+
+def test_status_bar_on_other_pages_while_a_job_runs(unraid):
+    client = idle_client(unraid)
+    assert 'class="jobbar idle"' in client.get("/browse").text
+    c = db.connect(unraid.db_path)
+    c.execute("INSERT INTO jobs(type, params, state, created_at) VALUES ('scan', '{}', 'running', 0)")
+    c.close()
+    page = client.get("/browse").text
+    assert 'hx-get="/partials/jobbar"' in page and "Scan #1" in page
+    assert 'id="jobbar"' not in client.get("/").text  # the dashboard's scan card shows it already
+    assert "Scan #1" in client.get("/partials/jobbar").text
+    page = client.get("/duplicates").text
+    assert "Scan in progress: duplicate groups appear here when the scan finishes" in page
+
+
+def test_phase_times_are_kept_for_the_next_scan():
+    st = Status()
+    st.reset(job=1, type="scan", phase="starting", plan=["walk", "hash_partial"])
+    st.set(phase="walk")
+    st.set(phase="hash_partial")
+    assert "walk" in st.raw()["phase_times"]
+    live = {**st.snapshot(), "phase": "walk", "disks": {"disk1": {"walked": 5}}}
+    assert progress_view(live, time.time(), last_times={"walk": 7200})["last_took"] == fmt_seconds(7200)
+    assert progress_view(live, time.time())["last_took"] == ""
+
+
+def test_first_scan_warning_on_the_dashboard(unraid):
+    client = idle_client(unraid)
+    assert "The first scan reads every file once" in client.get("/").text
+
+
+def test_live_paths_keep_the_file_name():
+    from deedoop.web.app import tail_path
+
+    assert tail_path("/mnt/disk1/backup/Steve/DESKTOP/Data/photo.jpg") == "…/Data/photo.jpg"
+    assert tail_path("/mnt/disk1") == "/mnt/disk1" and tail_path(None) == ""
+
+
+def test_browse_lists_child_folders_without_reading_every_file(unraid):
+    import random
+
+    from deedoop import queries
+
+    c = db.connect(unraid.db_path)
+    c.execute("INSERT INTO roots(path, disk, share, user_path, created_at) VALUES ('/r', 'disk1', 'S', '/u', 0)")
+    rnd = random.Random(1)
+    names = ["a", "a b", "a-b", "a0", "ab", "b", "B", "é", "x y", "a.b", "z!", "a!"]
+    dirs = {""} | {"/".join(rnd.choice(names) for _ in range(rnd.randint(1, 4))) for _ in range(500)}
+    for i, d in enumerate(sorted(dirs)):
+        state = "gone" if rnd.random() < 0.15 else "present"
+        c.execute("INSERT INTO files(root_id, dir, name, size, mtime_ns, dev, inode, nlink, ext, last_seen_run, state) "
+                  "VALUES (1, ?, ?, 1, 0, 1, ?, 1, 'x', 1, ?)", (d, f"n{i}", i, state))
+    present = [r[0] for r in c.execute("SELECT dir FROM files WHERE state = 'present'")]
+
+    def expected(prefix):
+        return {d[len(prefix):].split("/")[0] for d in present if d.startswith(prefix) and len(d) > len(prefix)}
+
+    for prefix in [""] + [d + "/" for d in sorted(dirs) if d]:
+        assert queries._child_dirs(c, 1, prefix) == expected(prefix), prefix
+    # it uses the index: a handful of lookups per child folder, not a pass over the files
+    plan = " ".join(r[3] for r in c.execute(
+        "EXPLAIN QUERY PLAN SELECT dir FROM files WHERE root_id = 1 AND dir > 'a' AND dir < 'b' "
+        "AND state = 'present' AND container_id = 0 ORDER BY dir LIMIT 1"))
+    assert "USING INDEX" in plan and "SCAN files" not in plan
+    totals = " ".join(r[3] for r in c.execute("EXPLAIN QUERY PLAN SELECT COUNT(*) FROM roots r CROSS JOIN files f "
+                                              "INDEXED BY files_root_state ON f.root_id = r.id"))
+    assert "files_root_state" in totals
+    c.close()
+
+
+# -- appdata stays small: the write-ahead log and the thumbnail cache --------------------
+
+
+def test_write_ahead_log_is_capped_and_shrunk(unraid):
+    c = db.connect(unraid.db_path)
+    assert c.execute("PRAGMA journal_size_limit").fetchone()[0] == db.WAL_SIZE_LIMIT
+    c.execute("CREATE TABLE junk (x BLOB)")
+    c.execute("BEGIN")
+    c.executemany("INSERT INTO junk VALUES (?)", [(os.urandom(4000),) for _ in range(3000)])
+    c.execute("COMMIT")
+    wal = str(unraid.db_path) + "-wal"
+    assert os.path.getsize(wal) > 5_000_000
+    reader = db.connect(unraid.db_path)
+    reader.execute("BEGIN")
+    reader.execute("SELECT COUNT(*) FROM junk").fetchone()  # a page reading at that moment...
+    c.execute("INSERT INTO junk VALUES (x'00')")  # ...while the scan writes on
+    assert db.shrink_wal(c, wait_ms=50) is False  # gives up quickly instead of stalling the scan
+    reader.execute("COMMIT")
+    reader.close()
+    assert db.shrink_wal(c) is True and os.path.getsize(wal) == 0
+    assert c.execute("PRAGMA busy_timeout").fetchone()[0] == 60000
+    c.close()
+
+
+def test_thumbnail_cache_keeps_under_its_limit(tmp_path):
+    from deedoop.worker import prune_thumbnails
+
+    for i in range(10):
+        p = tmp_path / "320" / f"{i:02x}" / f"{i}.jpg"
+        write(p, b"x" * 1000)
+        os.utime(p, (1000 + i, 1000 + i))
+    assert prune_thumbnails(tmp_path, 4500) == 6000
+    left = sorted(p.name for p in tmp_path.rglob("*.jpg"))
+    assert left == ["6.jpg", "7.jpg", "8.jpg", "9.jpg"]  # the newest stay
+
+
+def test_damaged_photo_metadata_goes_to_the_scan_log_with_the_path():
+    import warnings
+
+    from deedoop import engine
+
+    st = Status()
+    st.reset(job=1, type="scan", phase="hash_image")
+    saved = warnings.showwarning, list(warnings.filters)
+    try:
+        engine._route_pillow_warnings()
+        engine._reading.path, engine._reading.status = "/mnt/disk2/Photos/IMG_1.jpg", st
+        for tag in (272, 513):
+            warnings.warn_explicit(f"Tag data larger than file. Skipping tag {tag}", UserWarning,
+                                   os.path.join(os.sep, "usr", "lib", "PIL", "TiffImagePlugin.py"),
+                                   946, module="PIL.TiffImagePlugin")
+        lines = [m for _, level, m in st.recent_log(10) if level == "warn"]
+        assert lines == ["/mnt/disk2/Photos/IMG_1.jpg: damaged metadata (Tag data larger than file. Skipping tag 272); "
+                         "the picture itself was read"]  # once per file
+    finally:
+        engine._reading.path = engine._reading.status = None
+        warnings.showwarning = saved[0]
+        warnings.filters[:] = saved[1]

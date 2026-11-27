@@ -305,3 +305,14 @@ audio.player { height: 40px; }
 .media-copy { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; font-size: 13px; }
 .media-copy.keeper { border-color: var(--ok); }
 .media-copy .kv { grid-template-columns: max-content 1fr; font-size: 12.5px; row-gap: 2px; margin-top: 6px; }
+
+/* Status bar: the running job, at the bottom of every page but the dashboard. */
+.jobbar { position: sticky; bottom: 0; z-index: 5; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px;
+  max-width: 1200px; margin: 0 auto; padding: 8px 16px; background: var(--card); border-top: 1px solid var(--line);
+  box-shadow: 0 -2px 8px rgba(0, 0, 0, .06); font-size: 14px; }
+.jobbar.idle { display: none; }
+.jobbar progress { width: 120px; }
+.jobbar-link { margin-left: auto; }
+@media (max-width: 640px) { .jobbar progress { width: 80px; } .jobbar { font-size: 13px; } }
+/* Live paths: keep the end (the file name) when the column is too narrow; the ellipsis goes on the left. */
+.path.tail { direction: rtl; text-align: left; }

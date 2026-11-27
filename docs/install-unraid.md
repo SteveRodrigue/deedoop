@@ -61,6 +61,11 @@ wget -O /boot/config/plugins/dockerMan/templates-user/my-deedoop.xml \
    code and create the admin account. Or fill **Admin password (first run
    only)** before Apply, and remove it once you have signed in.
 6. In **Setup**, tick your shares, then start a scan from the **Dashboard**.
+   The first scan reads every file once, so on a large array it can take many
+   hours, even days. It runs in the background: the web UI stays usable, a bar
+   at the bottom of each page shows how far it is, and you can pause or stop it
+   (it carries on from where it was). Later scans only read new and changed
+   files and are much quicker.
 
 | Setting | Default | What it is |
 |---|---|---|

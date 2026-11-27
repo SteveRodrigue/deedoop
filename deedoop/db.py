@@ -412,6 +412,12 @@ MIGRATIONS: list[str] = [
         PRIMARY KEY (key_a, key_b)
     ) WITHOUT ROWID;
     """,
+    # Pages stay quick on a big index: totals per share and disk read this narrow
+    # index instead of every row of files, and the error count its own small one.
+    """
+    CREATE INDEX files_root_state ON files(root_id, state, container_id, size);
+    CREATE INDEX files_errors ON files(root_id) WHERE error IS NOT NULL;
+    """,
 ]
 
 DEFAULT_SETTINGS: dict[str, Any] = {
@@ -472,7 +478,27 @@ def connect(path: Path | str) -> sqlite3.Connection:
     conn.execute("PRAGMA busy_timeout=60000")
     conn.execute("PRAGMA temp_store=MEMORY")
     conn.execute("PRAGMA cache_size=-65536")
+    # After a checkpoint the write-ahead log is cut back to this size instead of
+    # staying as large as it once grew (it reached gigabytes in a long first scan).
+    conn.execute(f"PRAGMA journal_size_limit={WAL_SIZE_LIMIT}")
     return conn
+
+
+WAL_SIZE_LIMIT = 64 << 20
+
+
+def shrink_wal(conn: sqlite3.Connection, wait_ms: int = 200) -> bool:
+    """Copy the write-ahead log into the database and truncate it, if no reader
+    holds it right now. Waits at most ``wait_ms`` (writers pause meanwhile), so
+    a busy moment just means trying again later. True when it was emptied."""
+    conn.execute(f"PRAGMA busy_timeout={int(wait_ms)}")
+    try:
+        busy, _, _ = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+        return busy == 0
+    except sqlite3.OperationalError:
+        return False
+    finally:
+        conn.execute("PRAGMA busy_timeout=60000")
 
 
 def init(path: Path | str) -> None:

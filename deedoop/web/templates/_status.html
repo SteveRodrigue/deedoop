@@ -43,6 +43,7 @@
     {% elif pv.rate_files >= 1 %}· <span class="rate">{{ "{:,}".format(pv.rate_files | round | int) }} files/s</span>{% endif %}
     {% if pv.eta %}· <strong>{{ pv.eta }}</strong>{% if pv.rough %} <span class="muted">(rough)</span>{% endif %}
     {% elif live.phase == "walk" and not pv.todo %}<span class="muted">· first scan, so no total to count down from yet</span>{% endif %}
+    {% if pv.last_took %}<span class="muted">· last scan: {{ pv.last_took }}</span>{% endif %}
     <span class="muted">this phase</span>
   </p>
   {% endif %}
@@ -51,7 +52,7 @@
   <p style="margin:8px 0 0"><progress max="100" value="{{ pct }}"></progress> {{ "{:,}".format(live.done or 0) }} of {{ "{:,}".format(live.todo) }} files
     {% if pv.eta %}· <strong>{{ pv.eta }}</strong>{% endif %}
     {% if live.action %}· <a href="/changes/{{ live.action }}">details</a>{% endif %}
-    <span class="muted small path" title="{{ live.current }}">{{ live.current }}</span></p>
+    <span class="muted small path tail" title="{{ live.current }}"><bdi>{{ live.current | tail }}</bdi></span></p>
   {% endif %}
   {% if live.disks %}
   <table class="disks">
@@ -74,7 +75,7 @@
             {% endif %}
           {% endif %}
         </td>
-        <td class="path" title="{{ d.current }}">{{ d.current }}</td>
+        <td class="path tail" title="{{ d.current }}"><bdi>{{ d.current | tail }}</bdi></td>
       </tr>
     {% endfor %}
     </tbody>
@@ -91,13 +92,16 @@
     <div>
       {% if last %}
         Last {{ last.type }} #{{ last.id }}: <span class="pill {{ 'ok' if last.state == 'done' else 'warn' }}">{{ last.state }}</span>
-        <span class="muted">finished {{ last.finished_at | time }}</span>
+        <span class="muted">finished {{ last.finished_at | time }}{% if last_took %} · took {{ last_took }}{% endif %}</span>
         <a class="small" href="/log?job={{ last.id }}">log</a>
         {% if last.error %}<p class="flash {{ 'err' if last.state == 'failed' else 'warn' }} small" role="status">{{ last.error.splitlines()[0] }}{% if last.state == 'failed' and 'Setup' in last.error %} <a href="/setup">Go to Setup</a>{% endif %}</p>{% endif %}
         {% set r = last_progress.get("result", {}) %}
         {% if r.groups is defined %}<div class="small">{{ "{:,}".format(r.groups) }} exact groups ({{ r.wasted | bytes }}){% if r.image_groups is defined %}, {{ "{:,}".format(r.image_groups) }} photos with different metadata ({{ r.image_wasted | bytes }}){% endif %}{% if r.media_groups is defined %}, {{ "{:,}".format(r.media_groups) }} recordings with other tags ({{ r.media_wasted | bytes }}){% endif %}.</div>{% endif %}
       {% else %}
         No scan yet.
+        <p class="small muted first-scan">The first scan reads every file once, so on a large array it can take many hours,
+        even days. You can pause it or stop it and it carries on later; the pages stay usable meanwhile. Later scans
+        only read new and changed files and are much quicker.</p>
       {% endif %}
       {% if settings.schedule_enabled %}<div class="small muted">Scheduled daily {{ settings.schedule_start }} to {{ settings.schedule_end }}.</div>{% endif %}
     </div>

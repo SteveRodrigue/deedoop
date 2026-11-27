@@ -9,6 +9,7 @@ from __future__ import annotations
 import datetime as dt
 import io
 import json
+import warnings
 import zipfile
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -31,6 +32,7 @@ from ..discovery import RootError, add_custom_root, list_disks, list_shares, rem
 from ..imaging import THUMB_EXTS, NotAnImage, make_thumbnail
 from ..metadata import exiftool_available
 from ..tls import RENEW_DAYS, TlsInfo
+from ..worker import JOB_NAMES as worker_job_names
 from ..worker import Worker
 from . import security
 from .security import safe_next
@@ -48,6 +50,13 @@ def fmt_time(ts: float | None) -> str:
     return dt.datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
 
 
+def tail_path(path: str | None, keep: int = 2) -> str:
+    """'…/folder/file.ext' for a long path: the end is the part that changes
+    while a scan runs, so cutting it off made the progress look stuck."""
+    parts = (path or "").rstrip("/").split("/")
+    return (path or "") if len(parts) <= keep + 2 else "…/" + "/".join(parts[-keep:])
+
+
 def fmt_duration(seconds: float) -> str:
     s = int(seconds)
     h, rem = divmod(s, 3600)
@@ -63,7 +72,10 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
                tls_info: TlsInfo | None = None) -> FastAPI:
     cfg = cfg or load_config()
     db.init(cfg.db_path)
-    worker = worker or Worker(cfg)
+    # Thumbnails of photos with damaged EXIF made Pillow print warnings with no file
+    # name into the container log; scans record them, with the path, in the scan log.
+    warnings.filterwarnings("ignore", category=UserWarning, module=r"PIL\.")
+    worker = worker or Worker(cfg, isolate=True)  # jobs in their own process: pages stay quick
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -91,9 +103,28 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
         security.inline_script_hashes(HERE / "templates" / "base.html")))
     app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
 
+    def jobbar_view() -> dict | None:
+        """The running job for the status bar at the bottom of every page: what,
+        which phase, how far, how fast. No file names or paths, so it can show
+        to signed-out visitors of the read-only view too (SC8)."""
+        c = conn()
+        try:
+            active = db.active_job(c)
+            queued_scan = c.execute("SELECT id FROM jobs WHERE type = 'scan' AND state = 'queued' "
+                                    "ORDER BY id LIMIT 1").fetchone()
+        finally:
+            c.close()
+        if active is None:
+            return None
+        live = worker.status.snapshot() if worker.current_job == active["id"] else {}
+        pv = progress_view(live, dt.datetime.now().timestamp()) if live else {}
+        return {"id": active["id"], "type": active["type"], "name": worker_job_names.get(active["type"], "Job"),
+                "running": bool(live), "paused": bool(live.get("paused_since")), "pv": pv,
+                "queued_scan": queued_scan["id"] if queued_scan and queued_scan["id"] != active["id"] else None}
+
     def auth_context(request: Request) -> dict:
         sess = getattr(request.state, "session", None)
-        return {"session": sess, "signed_in": sess is not None,
+        return {"session": sess, "signed_in": sess is not None, "jobbar": jobbar_view(),
                 "needs_confirm": sess is not None and not sess.recently_confirmed(),
                 "legacy_password": cfg.legacy_password_set,
                 "public_view": getattr(request.state, "public_view", False)}
@@ -101,6 +132,7 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
     templates = Jinja2Templates(directory=HERE / "templates", context_processors=[auth_context])
     templates.env.filters["bytes"] = human_bytes
     templates.env.filters["time"] = fmt_time
+    templates.env.filters["tail"] = tail_path
     templates.env.globals["version"] = __version__
     templates.env.globals["phase_names"] = PHASE_NAMES
     templates.env.filters["clock"] = lambda ts: dt.datetime.fromtimestamp(ts).strftime("%H:%M:%S") if ts else ""
@@ -130,6 +162,10 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
         last_progress = json.loads(last["progress"]) if last else {}
         last_walked = sum(d.get("walked", 0) for d in (last_progress.get("disks") or {}).values()) \
             if last and last["state"] == "done" else 0
+        # Phase times of the last scan that finished (a stopped one only knows its first phases).
+        done_scan = c.execute("SELECT progress FROM jobs WHERE type = 'scan' AND state = 'done' "
+                              "ORDER BY id DESC LIMIT 1").fetchone()
+        last_times = (json.loads(done_scan["progress"]) or {}).get("phase_times", {}) if done_scan else {}
         return {
             "active": dict(active) if active else None,
             "last": dict(last) if last else None,
@@ -137,7 +173,8 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
             "last_progress": last_progress,
             "live": live,
             "elapsed": elapsed,
-            "pv": progress_view(live, now, last_walked) if live else {},
+            "pv": progress_view(live, now, last_walked, last_times) if live else {},
+            "last_took": fmt_duration(last_progress["active"]) if last_progress.get("active") else "",
             "log_tail": worker.status.recent_log(8) if worker.current_job else [],
             "paused": worker.control.paused if worker.current_job else False,
         }
@@ -344,6 +381,10 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
         finally:
             c.close()
 
+    @app.get("/partials/jobbar", response_class=HTMLResponse)
+    def jobbar_partial(request: Request):
+        return templates.TemplateResponse(request, "_jobbar.html", {})
+
     @app.get("/partials/status", response_class=HTMLResponse)
     def status_partial(request: Request):
         c = conn()
@@ -523,7 +564,7 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
         try:
             groups, total, wasted = queries.list_groups(c, flt)
             members = queries.group_members(c, [g["id"] for g in groups])
-            disks = [r["disk"] for r in queries.per_disk(c)]
+            disks = [r[0] for r in c.execute("SELECT DISTINCT disk FROM roots WHERE enabled = 1 ORDER BY disk")]
             pages = max(1, -(-total // flt.per_page))
             qs = _q_params(method=method if method != "exact" else "", category=category, q=q,
                            min_mb=min_mb or "", disk=disk, group=group or "", archives=archives)

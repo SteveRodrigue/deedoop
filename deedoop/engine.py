@@ -19,7 +19,9 @@ import logging
 import os
 import re
 import sqlite3
+import threading
 import time
+import warnings
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -117,7 +119,33 @@ class Scan:
         _save_cursor(self.conn, ctx.job_id, {"phase": phase + "_done"})
 
 
+# -- Pillow's warnings about damaged metadata ------------------------------------------
+# Pillow warns (to stderr, once per message, with no file name) when a photo's EXIF
+# block is truncated or malformed. The picture itself is usually fine. A scan sends
+# them to the scan log instead, once per file and with its path, so they can be
+# found; the container log stays readable.
+
+_reading = threading.local()
+_show_warning = warnings.showwarning
+
+
+def _route_warning(message, category, filename, lineno, file=None, line=None):  # noqa: ANN001 - warnings API
+    path, status = getattr(_reading, "path", None), getattr(_reading, "status", None)
+    if path and status is not None and issubclass(category, UserWarning) and f"{os.sep}PIL{os.sep}" in filename:
+        if getattr(_reading, "warned", None) != path:
+            _reading.warned = path
+            status.log("warn", f"{path}: damaged metadata ({str(message).strip()}); the picture itself was read")
+        return
+    _show_warning(message, category, filename, lineno, file, line)
+
+
+def _route_pillow_warnings() -> None:
+    warnings.filterwarnings("always", category=UserWarning, module=r"PIL\.")
+    warnings.showwarning = _route_warning
+
+
 def run_scan(ctx: ScanContext) -> dict:
+    _route_pillow_warnings()
     conn = db.connect(ctx.db_path)
     try:
         sync_share_roots(conn, ctx.mnt)
@@ -428,6 +456,7 @@ def _hash_disk(ctx: ScanContext, disk: str, phase: str, rows: list[sqlite3.Row],
                 continue
             path = os.path.join(row["root_path"], row["dir"], row["name"])
             st.disk(disk, current=path)
+            _reading.path, _reading.status = path, st
             exp = Expected(row["size"], row["mtime_ns"])
             try:
                 if phase == "hash_similar":
