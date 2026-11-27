@@ -65,10 +65,10 @@ deedoop finds **exact duplicates of any file type**, **photos that differ only i
 
 ## Install on Unraid
 
-Until deedoop is in Community Applications, add it with the template in this repo:
+deedoop is not in Community Applications yet, and its image is private: install it from the template in this repo. **[docs/install-unraid.md](docs/install-unraid.md)** has every step, including signing the server in to `ghcr.io` with a read-only token, updating and removing. In short:
 
-1. Copy [`unraid/deedoop.xml`](unraid/deedoop.xml) to `/boot/config/plugins/dockerMan/templates-user/my-deedoop.xml` on your server.
-2. In the Docker tab, click **Add Container**, pick **deedoop** from the template list, check the paths and click **Apply**.
+1. On the server, `docker login ghcr.io` with a GitHub token that has only `read:packages`.
+2. Copy [`unraid/deedoop.xml`](unraid/deedoop.xml) to `/boot/config/plugins/dockerMan/templates-user/my-deedoop.xml`, then in the Docker tab click **Add Container**, pick **deedoop**, check the paths and click **Apply**.
 3. Open the container's **Logs** and copy the setup code, then open `http://<server>:8080` (`https://` if you turned on HTTPS), enter the code and create the admin account. (Or set **Admin password (first run only)** in the template.)
 4. Go to **Setup**, tick your shares, then start a scan from the **Dashboard**.
 
