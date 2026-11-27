@@ -8,59 +8,77 @@ here publishes anything.
 You need: Unraid 6.10 or later, a terminal on the server (the `>_` icon in the
 web UI, or SSH), and a GitHub account that can read the package.
 
-## 1. Make a token that can only read packages
+Each step below does one thing. Step 1 is on github.com, steps 2 to 5 in the
+Unraid terminal, steps 6 to 8 in the Unraid web UI.
 
-GitHub's container registry takes a **classic** personal access token
-(fine-grained tokens do not work with it yet).
+## 1. Create a read-only GitHub token (on github.com)
+
+The server signs in to GitHub's registry with a token, not your password.
+
+| What | Value |
+|---|---|
+| Token type | **Personal access token (classic)**. The registry does not accept fine-grained tokens ([GitHub docs](https://docs.github.com/en/packages/learn-github-packages/about-permissions-for-github-packages#about-scopes-and-permissions-for-package-registries)) |
+| Scope | **`read:packages`** only: it can download images and nothing else |
+| Expiration | **90 days**. Avoid "No expiration" |
 
 1. Open <https://github.com/settings/tokens/new> (Settings > Developer settings >
-   Personal access tokens > Tokens (classic) > Generate new token).
-2. Note: `unraid deedoop pull`. Expiration: your choice (90 days is a good
-   default; you only need it to install and update).
-3. Tick **only** `read:packages`. Nothing else.
-4. Generate and copy the token. GitHub shows it once.
+   Personal access tokens > **Tokens (classic)**).
+2. **Note**: `unraid deedoop pull`. **Expiration**: 90 days.
+3. Under **Select scopes**, tick **only** `read:packages`. Leave `repo`,
+   `write:packages` and every other box empty.
+4. Click **Generate token** and copy it (it starts with `ghp_`). GitHub shows it
+   once; you only need it for step 3.
 
-## 2. Sign the server in to ghcr.io
+## 2. Open the Unraid terminal
 
-In the Unraid terminal (replace `YOUR_GITHUB_LOGIN`):
+In the Unraid web UI, click the `>_` icon at the top right (or connect with
+SSH as `root`). Steps 3 to 5 run here.
+
+## 3. Sign in to ghcr.io with the token
+
+Replace `YOUR_GITHUB_LOGIN`, run these lines, and paste the token when the
+cursor waits (nothing is shown):
 
 ```sh
-read -rs GHCR_TOKEN   # paste the token, press Enter (nothing is shown)
+read -rs GHCR_TOKEN
 printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u YOUR_GITHUB_LOGIN --password-stdin
 unset GHCR_TOKEN
-docker pull ghcr.io/steverodrigue/deedoop:latest   # checks the sign-in works
 ```
 
-`--password-stdin` keeps the token out of the shell history and the process
-list. Docker saves the sign-in in `/root/.docker/config.json`.
+You should see `Login Succeeded`. The token stays out of the shell history.
 
-**After a reboot the sign-in is gone.** Unraid keeps `/root` in memory. deedoop
-keeps running (the image is already on the server), but pulling an update fails
-until you run `docker login` again. That is the simplest and safest setup:
-sign in, update, done. If you would rather stay signed in, see
-[Staying signed in](#staying-signed-in) below.
+**After a reboot this sign-in is gone** (Unraid keeps `/root` in memory).
+deedoop keeps running, but updates fail until you repeat this step. To stay
+signed in, see [Staying signed in](#staying-signed-in).
 
-## 3. Add the template
+## 4. Download the image
+
+```sh
+docker pull ghcr.io/steverodrigue/deedoop:latest
+```
+
+If this fails with `denied` or `unauthorized`, redo step 3 (wrong login,
+expired token, or a scope other than `read:packages`).
+
+## 5. Add the template
+
+Still in the Unraid terminal:
 
 ```sh
 wget -O /boot/config/plugins/dockerMan/templates-user/my-deedoop.xml \
   https://raw.githubusercontent.com/SteveRodrigue/deedoop/main/unraid/deedoop.xml
 ```
 
-(Or copy [`unraid/deedoop.xml`](../unraid/deedoop.xml) there through the
+This is the last terminal command; you can close the terminal. (Without the
+terminal: copy [`unraid/deedoop.xml`](../unraid/deedoop.xml) through the
 `flash` share as `config/plugins/dockerMan/templates-user/my-deedoop.xml`.)
 
-## 4. Create the container
+## 6. Create the container (Unraid web UI)
 
 1. **Docker** tab > **Add Container**, then pick **deedoop** in the **Template**
    list.
-2. Check the settings (table below). The defaults are fine for a first look.
-3. Click **Apply**. Unraid pulls the image with the sign-in from step 2.
-4. Open the container's **Logs** and copy the one-time setup code.
-5. Open `http://<server>:8080` (`https://` if you turned HTTPS on), enter the
-   code and create the admin account. Or fill **Admin password (first run
-   only)** before Apply, and remove it once you have signed in.
-6. In **Setup**, tick your shares, then start a scan from the **Dashboard**.
+2. Check the settings in the table below. The defaults are fine for a first look.
+3. Click **Apply**.
 
 | Setting | Default | What it is |
 |---|---|---|
@@ -76,7 +94,27 @@ The template also runs the container as `nobody:users` (99:100) with a
 read-only root filesystem, a private `/tmp`, no Linux capabilities and
 `no-new-privileges` (**Extra Parameters**, in the advanced view). Leave them.
 
-### Letting deedoop change files
+## 7. Create the admin account
+
+1. Open `http://<server>:8080` (`https://` if you turned HTTPS on). deedoop
+   asks for a **setup code**.
+2. Get it from the container log: on the **Docker** tab, click the deedoop
+   icon > **Logs**, and copy the code at the end of the line
+   `deedoop has no admin account yet. … setup code: XXXX-XXXX-XXXX-XXXX`.
+   Or in the terminal: `docker logs deedoop 2>&1 | grep "setup code" | tail -1`.
+3. Enter the code and click **Continue**. A code lasts 60 minutes; after that,
+   reload the page and a new one is written to the log.
+4. Choose your user name and password, and click **Create the admin account**.
+
+(Or fill **Admin password (first run only)** in step 6, and remove it once you
+have signed in.)
+
+## 8. Start a scan
+
+In deedoop's **Setup**, tick your shares, then start a scan from the
+**Dashboard**.
+
+## Letting deedoop change files
 
 Read-only is the default on purpose. To let deedoop quarantine duplicates or
 apply plans, both of these are needed:
@@ -87,7 +125,7 @@ apply plans, both of these are needed:
 Set it back to **Read Only - Slave** whenever you want to be sure nothing
 moves.
 
-### HTTPS
+## HTTPS
 
 Set **HTTPS** to `on`. deedoop uses `cert.pem` and `key.pem` from
 `/mnt/user/appdata/deedoop/tls/` if you put them there, otherwise it makes a
@@ -102,7 +140,7 @@ Unraid checks for updates without your sign-in, so for a private image the
 Docker tab may say the update status is **not available** instead of offering
 an update. To update:
 
-1. Sign in again if the server rebooted since (step 2).
+1. Sign in again if the server rebooted since (step 3).
 2. Docker tab, switch to the **Advanced View**, and click **force update** on
    deedoop. Or, in the terminal: `docker pull ghcr.io/steverodrigue/deedoop:latest`,
    then edit the container and click **Apply**.
@@ -116,7 +154,7 @@ Optional. This keeps the token on the flash drive, which anyone who can read
 the `flash` share can copy, so keep that share private (Main > click **Flash** >
 **SMB Security Settings** > Export: **No**, or Private) and keep the token to `read:packages`.
 
-1. After `docker login` (step 2), save the sign-in on the flash drive:
+1. After `docker login` (step 3), save the sign-in on the flash drive:
 
    ```sh
    mkdir -p /boot/config/deedoop

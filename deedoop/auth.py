@@ -49,6 +49,7 @@ ACCOUNT_MAX_FAILURES = 20  # from any address in IP_WINDOW; then one try a minut
 ACCOUNT_SLOW = 60
 
 SETUP_CODE_TTL = 3600
+SETUP_TICKET_TTL = 900  # a right setup code opens the account form for 15 minutes
 _ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # no 0/O, 1/I
 
 # The most common passwords and keyboard walks of 12+ characters. Not a full
@@ -308,6 +309,8 @@ class SetupCode:
         self._lock = threading.Lock()
         self._code = ""
         self._made = 0.0
+        self._ticket = ""  # SHA-256 of the ticket handed out for a right code
+        self._ticket_made = 0.0
 
     def current(self) -> str:
         with self._lock:
@@ -325,9 +328,26 @@ class SetupCode:
         got = code.strip().upper().replace(" ", "")
         return secrets.compare_digest(got.replace("-", ""), want.replace("-", ""))
 
+    def issue_ticket(self) -> str:
+        """After a right code: a random ticket that lets the same browser post the
+        account form. The page carries the ticket, never the code (SC8). Only
+        the latest ticket works."""
+        ticket = secrets.token_urlsafe(32)
+        with self._lock:
+            self._ticket = hashlib.sha256(ticket.encode()).hexdigest()
+            self._ticket_made = time.time()
+        return ticket
+
+    def check_ticket(self, ticket: str) -> bool:
+        with self._lock:
+            if not self._ticket or not ticket or time.time() - self._ticket_made > SETUP_TICKET_TTL:
+                return False
+            return secrets.compare_digest(hashlib.sha256(ticket.encode()).hexdigest(), self._ticket)
+
     def burn(self) -> None:
         with self._lock:
             self._code = ""
+            self._ticket = ""
 
 
 def bootstrap(conn: sqlite3.Connection, admin_password: str | None, setup: SetupCode) -> None:
