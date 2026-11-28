@@ -50,6 +50,11 @@ COPY --from=build /install /usr/local
 # No package manager at run time: nothing can be installed into a running container.
 RUN pip uninstall -y -q pip setuptools wheel 2>/dev/null; rm -rf /usr/local/lib/python3.12/ensurepip \
  && mkdir -p /config && chown 99:100 /config
+# Which build this is, shown in the footer: scripts/ci.sh passes the commit and the date.
+ARG DEEDOOP_COMMIT=""
+ARG DEEDOOP_BUILD_DATE=""
+ENV DEEDOOP_COMMIT=$DEEDOOP_COMMIT \
+    DEEDOOP_BUILD_DATE=$DEEDOOP_BUILD_DATE
 ENV DEEDOOP_CONFIG=/config \
     DEEDOOP_MNT=/mnt \
     DEEDOOP_PORT=8080
