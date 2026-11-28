@@ -414,3 +414,9 @@ button.danger { --edge: var(--err); }
   .card, .tile { --cut: 10px; }
   .card::before, .tile::before { width: 12px; height: 12px; }
 }
+
+/* Benchmark proposal next to the Disk mode settings it would change. */
+.bench-note { border-left: 3px solid var(--accent); padding: 4px 0 4px 12px; margin: 0 0 12px; }
+.bench-note p { margin: 0 0 8px; }
+table.compare { max-width: 640px; }
+table.compare tr.changed td:first-child { font-weight: 600; }

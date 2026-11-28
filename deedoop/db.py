@@ -455,6 +455,11 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "parallel_disks": 2,
     # BLAKE3 threads per large file. 1 is right for spinning disks.
     "hash_threads": 1,
+    # The last time a benchmark proposal was applied: {"at", "bench_id", "changes":
+    # [[label, before, after], ...]}, shown in Setup so it is clear what changed.
+    "bench_applied": None,
+    # The admin hid the "run the benchmark" suggestion on the dashboard.
+    "bench_hint_dismissed": False,
     # Milestone 6: changes to files. Off until you turn them on in Setup.
     "allow_changes": False,
     "allow_direct_delete": False,  # removals skip the quarantine (cannot be undone)

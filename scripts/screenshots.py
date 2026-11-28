@@ -237,7 +237,9 @@ def prepare(work: Path):
     c = db.connect(cfg.db_path)
     try:
         db.set_settings(c, {"shares": ["Photos", "Backups", "Takeout", "Documents", "Music", "Media"],
-                            "takeout_paths": [str(mnt / "user/Takeout")]})
+                            "takeout_paths": [str(mnt / "user/Takeout")],
+                            # The demo does not benchmark; keep its suggestion out of the README shots.
+                            "bench_hint_dismissed": True})
     finally:
         c.close()
     client = make_client(cfg)
