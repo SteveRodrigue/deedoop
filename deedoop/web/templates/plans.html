@@ -1,8 +1,8 @@
 {% extends "base.html" %}
-{% block title %}Saved plans · deedoop{% endblock %}
+{% block title %}Saved plans · Organize · deedoop{% endblock %}
 {% block content %}
 <nav class="tabs">
-  <a href="/reorganize">New plan</a>
+  <a href="/reorganize">Organize files</a>
   <a href="/plans" class="on">Saved plans <span class="count">{{ plans | length }}</span></a>
 </nav>
 <section class="card">
@@ -20,6 +20,6 @@
     </tr>
     {% endfor %}
   </table>
-  {% else %}<p class="muted">No saved plans. <a href="/reorganize">Make one</a>, or open a folder in <a href="/browse">Browse</a> and choose “Reorganize these files”.</p>{% endif %}
+  {% else %}<p class="muted">No saved plans. <a href="/reorganize">Make one</a>, or open a folder in <a href="/browse">Browse</a> and choose “Organize these files”.</p>{% endif %}
 </section>
 {% endblock %}

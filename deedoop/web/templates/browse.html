@@ -60,7 +60,7 @@
     {% if artist %}<a href="/browse?loc={{ loc | urlencode }}&dir={{ flt.dir | urlencode }}&view=music">All artists</a>{% endif %}</p>
   {% elif flt.flat %}
   <p class="small muted">{{ "{:,}".format(res.total) }} files match in this folder and below.
-    {% if res.total %}<a href="{{ reorg }}">Reorganize these files</a>{% endif %}</p>
+    {% if res.total %}<a href="{{ reorg }}">Organize these files</a>{% endif %}</p>
   {% else %}
     {% if res.subdirs %}
     <div class="folders">
@@ -70,7 +70,7 @@
     </div>
     {% endif %}
     <p class="small muted">{{ "{:,}".format(res.total) }} files in this folder.
-      <a href="{{ reorg }}">Reorganize this folder and below</a></p>
+      <a href="{{ reorg }}">Organize this folder and below</a></p>
   {% endif %}
 </section>
 

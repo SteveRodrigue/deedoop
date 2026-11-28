@@ -1,5 +1,7 @@
 {% extends "base.html" %}
+{% from "_toast.html" import toast %}
 {% block title %}Duplicates · deedoop{% endblock %}
+{% block toasts %}{% if msg %}{{ toast(msg) }}{% endif %}{% endblock %}
 {% block content %}
 <nav class="tabs">
   {% for key, label in methods.items() %}
@@ -8,7 +10,6 @@
   {% endfor %}
 </nav>
 
-{% if msg %}<p class="flash ok">{{ msg }}</p>{% endif %}
 {% if marks.files %}
 <section class="card callout row between">
   <span><strong>{{ "{:,}".format(marks.files) }}</strong> {{ "copy" if marks.files == 1 else "copies" }} marked for removal, {{ marks.bytes | bytes }}.
@@ -178,7 +179,7 @@
   {% endif %}
 </details>
 {% else %}
-<section class="card"><p class="muted">No groups{% if flt.q or flt.category or flt.disk or flt.min_size or flt.group or flt.archives %} match these filters{% else %} yet. Run a scan from the <a href="/">Dashboard</a>{% endif %}.</p></section>
+<section class="card"><p class="muted">{% if jobbar and jobbar.type == "scan" and not (flt.q or flt.category or flt.disk or flt.min_size or flt.group or flt.archives) %}Scan in progress: duplicate groups appear here when the scan finishes, after the hashing and grouping phases. Follow it on the <a href="/">Dashboard</a> or in the bar below.{% else %}No groups{% if flt.q or flt.category or flt.disk or flt.min_size or flt.group or flt.archives %} match these filters{% else %} yet. Run a scan from the <a href="/">Dashboard</a>{% endif %}.{% endif %}</p></section>
 {% endfor %}
 
 {% if pages > 1 %}

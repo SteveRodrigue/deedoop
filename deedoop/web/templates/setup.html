@@ -1,20 +1,16 @@
 {% extends "base.html" %}
-{% block title %}Setup · deedoop{% if signed_in %}
-<section class="card" id="security-log">
-  <h2>Security log</h2>
-  <p class="muted">Sign-ins, failed attempts, lockouts and every change request, newest first.</p>
-  {% if events %}
-  <table class="log">
-    <thead><tr><th>When</th><th>Event</th><th>User</th><th>Address</th><th>Detail</th></tr></thead>
-    {% for e in events %}<tr><td>{{ e.at | time }}</td><td>{{ e.event }}</td><td>{{ e.username }}</td><td class="mono small">{{ e.ip }}</td><td class="detail small">{{ e.detail }}</td></tr>{% endfor %}
-  </table>
-  {% else %}<p class="muted">Nothing yet.</p>{% endif %}
-</section>
-{% endif %}
+{% from "_toast.html" import toast %}
+{% block title %}Setup · deedoop{% endblock %}
+{% block toasts %}
+{%- set saved_text = {"shares": "Shares saved", "folder": "Folder added", "removed": "Folder removed",
+    "settings": "Settings saved", "changes": "Change settings saved", "access": "Access settings saved",
+    "account": "Username changed", "password": "Password changed", "benchmark": "Proposal applied to Disk mode",
+    "bench_started": "Benchmark started"} %}
+{% if error %}{{ toast(error, "err") }}{% endif %}
+{% if saved == "changes" and settings.allow_changes and not gate.writable %}{{ toast("Change settings saved, but /mnt is read-only, so deedoop cannot change files yet.", "err") }}
+{% elif saved %}{{ toast(saved_text.get(saved, "Saved")) }}{% endif %}
 {% endblock %}
 {% block content %}
-{% if error %}<div class="flash err">{{ error }}</div>{% endif %}
-{% if saved %}<div class="flash ok">Saved.</div>{% endif %}
 
 <section class="card">
   <h2>Shares to scan</h2>
@@ -150,7 +146,10 @@
   <label class="radio"><input type="checkbox" name="schedule_enabled" value="1" {{ "checked" if settings.schedule_enabled }}>
     Scan every day from <input type="time" name="schedule_start" value="{{ settings.schedule_start }}">
     to <input type="time" name="schedule_end" value="{{ settings.schedule_end }}"></label>
-  <p class="muted small">A scheduled scan stops at the end time and picks up where it left off the next night. Scans you start yourself are not stopped.</p>
+  <p class="muted small">Unticked, deedoop never scans on its own: it scans only when you press <strong>Start scan</strong>.
+    Ticked, it starts one scan a day when the window opens and stops it at the end time; the next night's scan skips
+    files already read, so it carries on where it stopped. If the scan finishes early, nothing more runs until the next day.
+    The same start and end time means no end time. Scans you start yourself are never stopped.</p>
   <button>Save settings</button>
 </section>
 </form>
@@ -247,7 +246,9 @@
 <section class="card" id="benchmark">
   <h2>Benchmark</h2>
   <p class="muted">Reads a sample of large files from each selected disk alone, then from 2, 3, … disks at once, and measures
-  hashing speed. It proposes a disk mode; nothing changes until you apply it. Takes about {{ 10 }} seconds per disk and combination.</p>
+  hashing speed. It only helps tune <a href="#disk-mode">Disk mode</a>: it proposes one disk at a time or parallel,
+  how many disks to read together and hash threads per file. Nothing changes until you apply it. Optional: one disk at a time
+  is a safe default. Takes about {{ 10 }} seconds per disk and combination.</p>
   {% if active and active.type == "benchmark" %}
     {% include "_status.html" %}
   {% else %}

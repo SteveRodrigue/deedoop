@@ -2,9 +2,11 @@
 {% block title %}{{ "Create the admin account" if first_run else "Sign in" }} · deedoop{% endblock %}
 {% block content %}
 <div class="login">
+{% set status_card %}
 <section class="card">
   <h2>Status</h2>
   <p>{% if status.scanning %}<span class="pill ok">scanning</span> A scan is running.
+     {% elif status.scan_queued %}<span class="pill">queued</span> A scan starts as soon as the current job finishes.
      {% elif status.busy %}<span class="pill ok">working</span> A job is running.
      {% elif status.last_scan %}Last scan finished {{ status.last_scan | time }}{% if status.last_state and status.last_state != "done" %} ({{ status.last_state }}){% endif %}.
      {% else %}No scan yet.{% endif %}</p>
@@ -15,24 +17,43 @@
   </dl>
   {% if public_view %}<p class="small"><a href="/">Browse read-only without signing in</a></p>{% endif %}
 </section>
+{% endset %}
 
 {% if first_run %}
 <section class="card callout">
   <h2>Create the admin account</h2>
-  <p class="muted">deedoop has no admin yet. Signed out, it is read-only; the admin can change settings and files.
-    To prove you run this server, enter the <strong>setup code</strong> from the container log
-    (on Unraid: click the deedoop icon, then <em>Logs</em>). The code changes every hour and on every restart.</p>
+  <p class="muted">deedoop has no admin yet. Signed out, it is read-only; the admin can change settings and files.</p>
   {% if error %}<div class="flash err" role="alert">{{ error }}</div>{% endif %}
+  {% if not ticket %}
+  <h3 class="step-title"><span class="step-no">1</span> Enter the setup code <span class="muted small">step 1 of 2</span></h3>
+  <p>The setup code proves you run this server. deedoop writes it to its container log:</p>
+  <ol class="steps">
+    <li>In Unraid, open the <strong>Docker</strong> tab.</li>
+    <li>Click the <strong>deedoop</strong> icon, then <strong>Logs</strong>.</li>
+    <li>Copy the code at the end of the line <span class="mono">… setup code: XXXX-XXXX-XXXX-XXXX</span>.</li>
+  </ol>
+  <p class="muted small">Or in the Unraid terminal: <span class="mono">docker logs deedoop 2>&amp;1 | grep "setup code" | tail -1</span>.
+    A code lasts 60 minutes; after that, reload this page and a new one is written to the log.</p>
   <form method="post" action="/first-run" class="stack" data-public>{% include "_csrf.html" %}
-    <label>Setup code <input type="text" name="code" autocomplete="one-time-code" required maxlength="64" placeholder="ABCD-EFGH-JKLM-NPQR" class="mono"></label>
+    <label>Setup code <input type="text" name="code" autocomplete="one-time-code" required maxlength="64" placeholder="XXXX-XXXX-XXXX-XXXX" class="mono" autofocus></label>
+    <button>Continue</button>
+  </form>
+  {% else %}
+  <h3 class="step-title"><span class="step-no">2</span> Choose your user name and password <span class="muted small">step 2 of 2</span></h3>
+  <p class="muted small">Setup code accepted.</p>
+  <form method="post" action="/first-run" class="stack" data-public>{% include "_csrf.html" %}
+    <input type="hidden" name="ticket" value="{{ ticket }}">
     <label>User name <input type="text" name="username" value="admin" autocomplete="username" required maxlength="64"></label>
-    <label>Password <input type="password" name="password" autocomplete="new-password" required minlength="12" maxlength="1024"></label>
+    <label>Password <input type="password" name="password" autocomplete="new-password" required minlength="12" maxlength="1024" autofocus></label>
     <label>Password again <input type="password" name="password2" autocomplete="new-password" required minlength="12" maxlength="1024"></label>
     <p class="muted small">At least 12 characters. A few unrelated words are easy to remember and hard to guess.</p>
     <button>Create the admin account</button>
   </form>
+  {% endif %}
 </section>
+{{ status_card }}
 {% else %}
+{{ status_card }}
 <section class="card">
   <h2>Sign in</h2>
   {% if error %}<div class="flash err" role="alert">{{ error }}</div>{% endif %}

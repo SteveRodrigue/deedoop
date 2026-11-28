@@ -10,20 +10,25 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
+import multiprocessing
+import os
 import threading
 import time
 import traceback
+from pathlib import Path
 
 from . import changes, db
 from .benchmark import BenchConfig, disk_paths_for_benchmark, run_benchmark
 from .config import AppConfig
-from .control import Control, Status, Stopped, fmt_seconds
+from .control import Control, JobProblem, Status, Stopped, fmt_seconds
 from .discovery import list_disks
 from .engine import ScanContext, regroup, run_scan
 
 log = logging.getLogger("deedoop.worker")
 
 PERSIST_SECONDS = 5.0
+WAL_SHRINK_SECONDS = 60.0
+THUMB_CACHE_MAX = 1 << 30   # thumbnails in /config/thumbs; the oldest go first beyond this
 
 
 def _parse_hhmm(s: str) -> dt.time:
@@ -84,10 +89,123 @@ class JobLogHandler(logging.Handler):
             self.handleError(record)
 
 
+def prune_thumbnails(folder, limit: int) -> int:
+    """Keep the thumbnail cache under ``limit`` bytes, removing the files used
+    longest ago (their modification time: a thumbnail is written once, then
+    served from the cache). Returns the bytes removed."""
+    files = []
+    for dirpath, _, names in os.walk(folder):
+        for n in names:
+            p = os.path.join(dirpath, n)
+            try:
+                st = os.stat(p)
+            except OSError:
+                continue
+            files.append((st.st_mtime, st.st_size, p))
+    total = sum(f[1] for f in files)
+    removed = 0
+    for _, size, p in sorted(files):
+        if total - removed <= limit:
+            break
+        try:
+            Path(p).unlink(missing_ok=True)  # SC2 covers /mnt; this is deedoop's own cache in /config
+            removed += size
+        except OSError:
+            continue
+    return removed
+
+
+def execute(cfg: AppConfig, bench_cfg: BenchConfig, job: dict, params: dict, control: Control,
+            status: Status) -> tuple[str, str | None, dict]:
+    """Run one job; returns (state, error, result). Called in the job's own
+    process (see :func:`_job_process`), or in the worker thread in tests."""
+    conn = db.connect(cfg.db_path)
+    try:
+        state, error, result = "done", None, {}
+        try:
+            if job["type"] == "scan":
+                result = run_scan(ScanContext(cfg.db_path, cfg.mnt, job["id"], control, status))
+            elif job["type"] == "benchmark":
+                paths = disk_paths_for_benchmark(conn, list_disks(cfg.mnt))
+                bench = run_benchmark(paths, bench_cfg, control, progress=lambda **kw: status.set(**kw))
+                conn.execute("INSERT INTO benchmarks(created_at, result) VALUES (?, ?)",
+                             (bench["created_at"], json.dumps(bench)))
+                result = {"benchmark": True}
+            elif job["type"] == "regroup":
+                # A scanner was turned on or off in Setup: rebuild the groups
+                # from the index without reading any file.
+                status.set(phase="group")
+                result = regroup(conn, db.get_settings(conn))
+            elif job["type"] in ("action", "undo", "purge"):
+                run = {"action": changes.run_action, "undo": changes.run_undo,
+                       "purge": changes.run_purge}[job["type"]]
+                result = run(changes.RunContext(cfg.db_path, cfg.mnt, params["action_id"], control, status))
+            else:
+                raise ValueError(f"unknown job type {job['type']}")
+        except Stopped as e:
+            state, error = ("queued", None) if str(e) == "shutdown" else ("stopped", str(e))
+        except JobProblem as e:
+            log.warning("job %s: %s", job["id"], e)
+            state, error = "failed", str(e)
+        except Exception as e:
+            log.exception("job %s failed", job["id"])
+            state, error = "failed", f"{type(e).__name__}: {e}\n{traceback.format_exc(limit=5)}"
+        return state, error, result
+    finally:
+        conn.close()
+
+
+SEND_SECONDS = 0.5   # how often the job's process sends its progress to the web process
+JOB_NICE = 10        # the job's process gives way to the web pages for CPU
+
+
+def _job_process(cfg: AppConfig, bench_cfg: BenchConfig, job: dict, params: dict, control: Control,
+                 start: dict, pipe) -> None:
+    """The job's own process. A scan is mostly Python code walking folders and
+    writing the index; in the web server's process it held the interpreter
+    lock so often that every page waited for it. Here it can't, and at a
+    lower CPU priority the pages come first."""
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    try:
+        os.nice(JOB_NICE)
+    except OSError:
+        pass
+    status = Status()
+    status.mirror(start, [])
+    logging.getLogger("deedoop").addHandler(JobLogHandler(status))
+    done = threading.Event()
+    sent = 0
+
+    def send(final: tuple | None = None) -> None:
+        nonlocal sent
+        if control.paused != bool(status.raw().get("paused_since")):
+            status.paused(control.paused)
+        lines, sent = status.log_since(sent)
+        pipe.send(("done", status.raw(), lines, final) if final else ("status", status.raw(), lines, None))
+
+    def sender() -> None:
+        while not done.wait(SEND_SECONDS):
+            send()
+
+    t = threading.Thread(target=sender, name="deedoop-job-progress", daemon=True)
+    t.start()
+    try:
+        outcome = execute(cfg, bench_cfg, job, params, control, status)
+    finally:
+        done.set()
+        t.join(2)
+    send(outcome)
+    pipe.close()
+
+
 class Worker:
-    def __init__(self, cfg: AppConfig, bench_cfg: BenchConfig | None = None):
+    def __init__(self, cfg: AppConfig, bench_cfg: BenchConfig | None = None, isolate: bool = False):
+        """``isolate``: run each job in its own process (the app does; most
+        tests run jobs in the worker thread, which is quicker to start)."""
         self.cfg = cfg
         self.bench_cfg = bench_cfg or BenchConfig()
+        self.isolate = isolate
+        self._mp = multiprocessing.get_context("spawn") if isolate else None
         self.status = Status()
         self.control = Control()
         self._log_handler = JobLogHandler(self.status)
@@ -164,6 +282,7 @@ class Worker:
         if time.time() - self._last_purge_check < 3600:
             return
         self._last_purge_check = time.time()
+        prune_thumbnails(self.cfg.config_dir / "thumbs", THUMB_CACHE_MAX)
         conn = db.connect(self.cfg.db_path)
         try:
             if changes.gate(conn, self.cfg.mnt)["open"]:
@@ -198,7 +317,7 @@ class Worker:
             if job is None:
                 return False
             params = json.loads(job["params"])
-            self.control = Control()
+            self.control = Control(self._mp)
             self.current_job = job["id"]
             self._job_is_scheduled = bool(params.get("scheduled"))
             self.status.reset(job=job["id"], type=job["type"], phase="starting")
@@ -214,30 +333,8 @@ class Worker:
             stop_persist = threading.Event()
             persister = threading.Thread(target=self._persist, args=(job["id"], stop_persist), daemon=True)
             persister.start()
-            state, error, result = "done", None, {}
             try:
-                if job["type"] == "scan":
-                    result = run_scan(ScanContext(self.cfg.db_path, self.cfg.mnt, job["id"],
-                                                  self.control, self.status))
-                elif job["type"] == "benchmark":
-                    result = self._benchmark(conn)
-                elif job["type"] == "regroup":
-                    # A scanner was turned on or off in Setup: rebuild the groups
-                    # from the index without reading any file.
-                    self.status.set(phase="group")
-                    result = regroup(conn, db.get_settings(conn))
-                elif job["type"] in ("action", "undo", "purge"):
-                    run = {"action": changes.run_action, "undo": changes.run_undo,
-                           "purge": changes.run_purge}[job["type"]]
-                    result = run(changes.RunContext(self.cfg.db_path, self.cfg.mnt, params["action_id"],
-                                                    self.control, self.status))
-                else:
-                    raise ValueError(f"unknown job type {job['type']}")
-            except Stopped as e:
-                state, error = ("queued", None) if str(e) == "shutdown" else ("stopped", str(e))
-            except Exception as e:
-                log.exception("job %s failed", job["id"])
-                state, error = "failed", f"{type(e).__name__}: {e}\n{traceback.format_exc(limit=5)}"
+                state, error, result = self._run_job(dict(job), params)
             finally:
                 stop_persist.set()
                 persister.join(2)
@@ -258,20 +355,51 @@ class Worker:
 
     def _persist(self, job_id: int, stop: threading.Event) -> None:
         conn = db.connect(self.cfg.db_path)
+        last_shrink = time.monotonic()
         try:
             while not stop.wait(PERSIST_SECONDS):
                 conn.execute("UPDATE jobs SET progress = ? WHERE id = ?",
                              (json.dumps(self.status.snapshot()), job_id))
                 db.add_log(conn, job_id, self.status.drain_log())
+                # A long scan writes constantly while pages read: the automatic
+                # checkpoints rarely find the log free, so it kept growing.
+                if time.monotonic() - last_shrink > WAL_SHRINK_SECONDS:
+                    last_shrink = time.monotonic()
+                    db.shrink_wal(conn)
         except Exception:
             log.exception("progress persist failed")
         finally:
             conn.close()
 
-    def _benchmark(self, conn) -> dict:
-        paths = disk_paths_for_benchmark(conn, list_disks(self.cfg.mnt))
-        result = run_benchmark(paths, self.bench_cfg, self.control,
-                               progress=lambda **kw: self.status.set(**kw))
-        conn.execute("INSERT INTO benchmarks(created_at, result) VALUES (?, ?)",
-                     (result["created_at"], json.dumps(result)))
-        return {"benchmark": True}
+    def _run_job(self, job: dict, params: dict) -> tuple[str, str | None, dict]:
+        if not self.isolate:
+            return execute(self.cfg, self.bench_cfg, job, params, self.control, self.status)
+        parent, child = self._mp.Pipe(duplex=False)
+        proc = self._mp.Process(target=_job_process, name=f"deedoop-job-{job['id']}", daemon=True,
+                                args=(self.cfg, self.bench_cfg, job, params, self.control, self.status.raw(), child))
+        proc.start()
+        child.close()
+        outcome = None
+        try:
+            while outcome is None:
+                if parent.poll(1.0):
+                    try:
+                        kind, data, lines, final = parent.recv()
+                    except EOFError:
+                        break
+                    self.status.mirror(data, lines)
+                    if kind == "done":
+                        outcome = final
+                elif not proc.is_alive():
+                    break
+        finally:
+            proc.join(10)
+            if proc.is_alive():
+                proc.kill()
+            parent.close()
+        if outcome is None:
+            # Killed (out of memory, say) or crashed without a word: never leave the job "running".
+            log.error("job %s: its process ended unexpectedly (exit code %s)", job["id"], proc.exitcode)
+            return "failed", (f"The job's process ended unexpectedly (exit code {proc.exitcode}), for example "
+                              "because the container ran out of memory. See the container log."), {}
+        return outcome

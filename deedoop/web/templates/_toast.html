@@ -1,0 +1,14 @@
+{# Floating confirmation after a save. app.js moves each one into the live region in
+   base.html so screen readers announce it, then hides "ok" ones after a few seconds.
+   Errors stay until closed. The icon shape and the "Error" word carry the meaning, not
+   only the colour. Text is always escaped (SC5). #}
+{% macro toast(text, kind="ok") -%}
+<div class="toast {{ 'err' if kind == 'err' else 'ok' }}" data-toast="{{ 'err' if kind == 'err' else 'ok' }}">
+  {%- if kind == "err" %}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2 20h20L12 3z"/><path d="M12 10v4M12 17v.5"/></svg>
+  <p><strong>Error:</strong> {{ text }}</p>
+  {%- else %}<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m8 12.5 2.7 2.7L16.5 9.5"/></svg>
+  <p><span class="sr-only">Done: </span>{{ text }}</p>{% endif %}
+  <button type="button" class="toast-close" data-toast-close aria-label="Close">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+</div>
+{%- endmacro %}

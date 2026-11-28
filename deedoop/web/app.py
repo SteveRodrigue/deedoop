@@ -9,6 +9,7 @@ from __future__ import annotations
 import datetime as dt
 import io
 import json
+import warnings
 import zipfile
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -31,6 +32,7 @@ from ..discovery import RootError, add_custom_root, list_disks, list_shares, rem
 from ..imaging import THUMB_EXTS, NotAnImage, make_thumbnail
 from ..metadata import exiftool_available
 from ..tls import RENEW_DAYS, TlsInfo
+from ..worker import JOB_NAMES as worker_job_names
 from ..worker import Worker
 from . import security
 from .security import safe_next
@@ -48,6 +50,13 @@ def fmt_time(ts: float | None) -> str:
     return dt.datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
 
 
+def tail_path(path: str | None, keep: int = 2) -> str:
+    """'…/folder/file.ext' for a long path: the end is the part that changes
+    while a scan runs, so cutting it off made the progress look stuck."""
+    parts = (path or "").rstrip("/").split("/")
+    return (path or "") if len(parts) <= keep + 2 else "…/" + "/".join(parts[-keep:])
+
+
 def fmt_duration(seconds: float) -> str:
     s = int(seconds)
     h, rem = divmod(s, 3600)
@@ -63,7 +72,10 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
                tls_info: TlsInfo | None = None) -> FastAPI:
     cfg = cfg or load_config()
     db.init(cfg.db_path)
-    worker = worker or Worker(cfg)
+    # Thumbnails of photos with damaged EXIF made Pillow print warnings with no file
+    # name into the container log; scans record them, with the path, in the scan log.
+    warnings.filterwarnings("ignore", category=UserWarning, module=r"PIL\.")
+    worker = worker or Worker(cfg, isolate=True)  # jobs in their own process: pages stay quick
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -91,9 +103,28 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
         security.inline_script_hashes(HERE / "templates" / "base.html")))
     app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
 
+    def jobbar_view() -> dict | None:
+        """The running job for the status bar at the bottom of every page: what,
+        which phase, how far, how fast. No file names or paths, so it can show
+        to signed-out visitors of the read-only view too (SC8)."""
+        c = conn()
+        try:
+            active = db.active_job(c)
+            queued_scan = c.execute("SELECT id FROM jobs WHERE type = 'scan' AND state = 'queued' "
+                                    "ORDER BY id LIMIT 1").fetchone()
+        finally:
+            c.close()
+        if active is None:
+            return None
+        live = worker.status.snapshot() if worker.current_job == active["id"] else {}
+        pv = progress_view(live, dt.datetime.now().timestamp()) if live else {}
+        return {"id": active["id"], "type": active["type"], "name": worker_job_names.get(active["type"], "Job"),
+                "running": bool(live), "paused": bool(live.get("paused_since")), "pv": pv,
+                "queued_scan": queued_scan["id"] if queued_scan and queued_scan["id"] != active["id"] else None}
+
     def auth_context(request: Request) -> dict:
         sess = getattr(request.state, "session", None)
-        return {"session": sess, "signed_in": sess is not None,
+        return {"session": sess, "signed_in": sess is not None, "jobbar": jobbar_view(),
                 "needs_confirm": sess is not None and not sess.recently_confirmed(),
                 "legacy_password": cfg.legacy_password_set,
                 "public_view": getattr(request.state, "public_view", False)}
@@ -101,6 +132,7 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
     templates = Jinja2Templates(directory=HERE / "templates", context_processors=[auth_context])
     templates.env.filters["bytes"] = human_bytes
     templates.env.filters["time"] = fmt_time
+    templates.env.filters["tail"] = tail_path
     templates.env.globals["version"] = __version__
     templates.env.globals["phase_names"] = PHASE_NAMES
     templates.env.filters["clock"] = lambda ts: dt.datetime.fromtimestamp(ts).strftime("%H:%M:%S") if ts else ""
@@ -123,19 +155,27 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
             "SELECT * FROM jobs WHERE state NOT IN ('queued', 'running') AND type = 'scan' ORDER BY id DESC LIMIT 1"
         ).fetchone()
         live = worker.status.snapshot() if worker.current_job else {}
+        queued_scan = c.execute("SELECT id FROM jobs WHERE type = 'scan' AND state = 'queued' AND id != ? "
+                                "ORDER BY id LIMIT 1", (active["id"] if active else 0,)).fetchone()
         now = dt.datetime.now().timestamp()
         elapsed = fmt_duration(now - live["started"]) if live.get("started") else ""
         last_progress = json.loads(last["progress"]) if last else {}
         last_walked = sum(d.get("walked", 0) for d in (last_progress.get("disks") or {}).values()) \
             if last and last["state"] == "done" else 0
+        # Phase times of the last scan that finished (a stopped one only knows its first phases).
+        done_scan = c.execute("SELECT progress FROM jobs WHERE type = 'scan' AND state = 'done' "
+                              "ORDER BY id DESC LIMIT 1").fetchone()
+        last_times = (json.loads(done_scan["progress"]) or {}).get("phase_times", {}) if done_scan else {}
         return {
             "active": dict(active) if active else None,
             "last": dict(last) if last else None,
+            "queued_scan": queued_scan["id"] if queued_scan else None,
             "last_progress": last_progress,
             "live": live,
             "elapsed": elapsed,
-            "pv": progress_view(live, now, last_walked) if live else {},
-            "log_tail": worker.status.recent_log(6) if worker.current_job else [],
+            "pv": progress_view(live, now, last_walked, last_times) if live else {},
+            "last_took": fmt_duration(last_progress["active"]) if last_progress.get("active") else "",
+            "log_tail": worker.status.recent_log(8) if worker.current_job else [],
             "paused": worker.control.paused if worker.current_job else False,
         }
 
@@ -158,12 +198,24 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
     def public_status(c) -> dict:
         """What the sign-in page shows to anyone: no file names, no paths."""
         active = db.active_job(c)
+        scan = c.execute("SELECT state FROM jobs WHERE type = 'scan' AND state IN ('queued', 'running') "
+                         "ORDER BY id LIMIT 1").fetchone()
         last = c.execute("SELECT finished_at, state FROM jobs WHERE type = 'scan' AND state NOT IN ('queued', 'running') "
                          "ORDER BY id DESC LIMIT 1").fetchone()
         st = queries.index_stats(c, cfg.db_path)
-        return {"scanning": active is not None and active["type"] == "scan", "busy": active is not None,
+        return {"scanning": scan is not None and scan["state"] == "running",
+                "scan_queued": scan is not None and scan["state"] == "queued", "busy": active is not None,
                 "last_scan": last["finished_at"] if last else None, "last_state": last["state"] if last else "",
                 "files": st.get("files", 0), "groups": st.get("groups", 0), "wasted": st.get("total_wasted", 0)}
+
+    def _login_page(request: Request, c, *, next: str = "/", error: str = "", ticket: str = ""):
+        first_run = not auth.has_admin(c)
+        if first_run and not ticket:
+            setup_code.current()  # makes sure a valid code is in the log
+        return templates.TemplateResponse(request, "login.html", {
+            "nav": "login", "next": safe_next(next), "error": error, "first_run": first_run,
+            "ticket": ticket, "status": public_status(c), "public_view": request.state.public_view,
+            "gate": {"open": False}})
 
     @app.get("/login", response_class=HTMLResponse)
     def login_page(request: Request, next: str = "/", error: str = ""):
@@ -171,13 +223,7 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
             return RedirectResponse(safe_next(next), status_code=303)
         c = conn()
         try:
-            first_run = not auth.has_admin(c)
-            if first_run:
-                setup_code.current()  # makes sure a valid code is in the log
-            return templates.TemplateResponse(request, "login.html", {
-                "nav": "login", "next": safe_next(next), "error": error, "first_run": first_run,
-                "status": public_status(c), "public_view": request.state.public_view,
-                "gate": {"open": False}})
+            return _login_page(request, c, next=next, error=error)
         finally:
             c.close()
 
@@ -197,31 +243,43 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
 
     @app.post("/first-run")
     def first_run(request: Request, code: Annotated[str, Form(max_length=64)] = "",
+                  ticket: Annotated[str, Form(max_length=128)] = "",
                   username: Annotated[str, Form(max_length=64)] = "admin",
                   password: Annotated[str, Form(max_length=auth.MAX_PASSWORD)] = "",
                   password2: Annotated[str, Form(max_length=auth.MAX_PASSWORD)] = ""):
+        """Two steps. 1: the setup code from the log; a right one returns the
+        account form with a ticket. 2: the ticket, user name and password."""
         c = conn()
         try:
             if auth.has_admin(c):
                 return RedirectResponse("/login", status_code=303)
-            # Wrong codes are throttled like wrong passwords.
+            # Wrong codes and tickets are throttled like wrong passwords.
             wait = auth.lockout_remaining(c, _ip(request))
             if wait:
                 return RedirectResponse(f"/login?error={_q('Too many wrong setup codes. Try again later.')}",
                                         status_code=303)
-            if not setup_code.check(code):
+            if not ticket:
+                if not setup_code.check(code):
+                    try:
+                        auth.authenticate(c, "(setup code)", "", _ip(request))
+                    except auth.AuthError:
+                        pass
+                    return RedirectResponse(f"/login?error={_q('That setup code is wrong or has expired. The current code is in the container log.')}",
+                                            status_code=303)
+                return _login_page(request, c, ticket=setup_code.issue_ticket())
+            if not setup_code.check_ticket(ticket):
                 try:
                     auth.authenticate(c, "(setup code)", "", _ip(request))
                 except auth.AuthError:
                     pass
-                return RedirectResponse(f"/login?error={_q('That setup code is wrong or has expired. The current code is in the container log.')}",
+                return RedirectResponse(f"/login?error={_q('That step took too long. Enter the setup code again.')}",
                                         status_code=303)
             if password != password2:
-                return RedirectResponse(f"/login?error={_q('The two passwords are different.')}", status_code=303)
+                return _login_page(request, c, ticket=ticket, error="The two passwords are different.")
             try:
                 uid = auth.create_admin(c, username, password)
             except auth.AuthError as e:
-                return RedirectResponse(f"/login?error={_q(str(e))}", status_code=303)
+                return _login_page(request, c, ticket=ticket, error=str(e))
             setup_code.burn()
             auth.event(c, "admin_created", username.strip(), _ip(request), "with the setup code")
         finally:
@@ -319,8 +377,14 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
 
     # -- pages ----------------------------------------------------------------
 
+    DASHBOARD_NOTICES = {
+        "noshares": ("err", "There is nothing to scan yet: tick the shares to scan on the Setup screen and save, "
+                            "then start the scan."),
+        "queued": ("ok", "Scan queued: it starts as soon as the job that is running now finishes."),
+    }
+
     @app.get("/", response_class=HTMLResponse)
-    def dashboard(request: Request):
+    def dashboard(request: Request, notice: Annotated[str, Query(max_length=16)] = ""):
         c = conn()
         try:
             stats = queries.index_stats(c, cfg.db_path)
@@ -328,9 +392,13 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
             return render(request, "dashboard.html", stats=stats, roots=roots,
                           by_cat=queries.wasted_by_category(c), disks=queries.per_disk(c),
                           settings=(s := db.get_settings(c)), methods_on=scanners.methods(s),
-                          raw_only=scanners.raw_only(s), **job_view(c))
+                          raw_only=scanners.raw_only(s), notice=DASHBOARD_NOTICES.get(notice), **job_view(c))
         finally:
             c.close()
+
+    @app.get("/partials/jobbar", response_class=HTMLResponse)
+    def jobbar_partial(request: Request):
+        return templates.TemplateResponse(request, "_jobbar.html", {})
 
     @app.get("/partials/status", response_class=HTMLResponse)
     def status_partial(request: Request):
@@ -488,7 +556,7 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
         finally:
             c.close()
         worker.wake()
-        return RedirectResponse("/setup#benchmark", status_code=303)
+        return RedirectResponse("/setup?saved=bench_started#benchmark", status_code=303)
 
     @app.post("/setup/benchmark/apply")
     def setup_benchmark_apply():
@@ -511,7 +579,7 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
         try:
             groups, total, wasted = queries.list_groups(c, flt)
             members = queries.group_members(c, [g["id"] for g in groups])
-            disks = [r["disk"] for r in queries.per_disk(c)]
+            disks = [r[0] for r in c.execute("SELECT DISTINCT disk FROM roots WHERE enabled = 1 ORDER BY disk")]
             pages = max(1, -(-total // flt.per_page))
             qs = _q_params(method=method if method != "exact" else "", category=category, q=q,
                            min_mb=min_mb or "", disk=disk, group=group or "", archives=archives)
@@ -635,7 +703,7 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
                             content_disposition_type="inline")
 
     @app.get("/review", response_class=HTMLResponse)
-    def review(request: Request, view: str = "queue", done: str = "", kind: str = "photos"):
+    def review(request: Request, view: str = "queue", done: str = "", kind: str = "photos", msg: str = ""):
         c = conn()
         try:
             s = db.get_settings(c)
@@ -650,13 +718,13 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
                         side["play"] = side["ext"] in PLAYABLE
                 return render(request, "review_media.html", pairs=pairs, view="decided" if decided else "queue",
                               counts=media_counts, photo_counts=similar.counts(c, t), settings=s,
-                              decisions=media_similar.DECISIONS, done=done,
+                              decisions=media_similar.DECISIONS, done=done, msg=msg,
                               media_on="media_similar" in scanners.methods(s))
             pairs = [p for p in (queries.pair_view(c, r) for r in similar.queue(c, t, decided=decided,
                                                                                   limit=100 if decided else 2)) if p]
             return render(request, "review.html", pairs=pairs, view="decided" if decided else "queue",
                           counts=similar.counts(c, t), threshold=t, settings=s, decisions=similar.DECISIONS,
-                          done=done, max_distance=similar.MAX_DISTANCE, media_counts=media_counts)
+                          done=done, msg=msg, max_distance=similar.MAX_DISTANCE, media_counts=media_counts)
         finally:
             c.close()
 
@@ -681,7 +749,7 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
             media_similar.rebuild_groups(c)
         finally:
             c.close()
-        return RedirectResponse("/review?kind=media&view=decided", status_code=303)
+        return RedirectResponse(_with_msg("/review?kind=media&view=decided", "Decision undone"), status_code=303)
 
     @app.get("/poster/{file_id}")
     def poster(file_id: int):
@@ -737,7 +805,7 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
             similar.rebuild_similar_groups(c, threshold_of(db.get_settings(c)))
         finally:
             c.close()
-        return RedirectResponse("/review?view=decided", status_code=303)
+        return RedirectResponse(_with_msg("/review?view=decided", "Decision undone"), status_code=303)
 
     @app.post("/review/threshold")
     def review_threshold(threshold: int = Form(...), view: str = Form("queue")):
@@ -749,7 +817,8 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
             refresh_coverage(c, t)
         finally:
             c.close()
-        return RedirectResponse(f"/review?view={'decided' if view == 'decided' else 'queue'}", status_code=303)
+        return RedirectResponse(_with_msg(f"/review?view={'decided' if view == 'decided' else 'queue'}",
+                                          f"Match closeness set to {t}"), status_code=303)
 
     @app.get("/archives", response_class=HTMLResponse)
     def archives_page(request: Request):
@@ -937,7 +1006,7 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
             changes.unmark_group(c, group_id)
         finally:
             c.close()
-        return RedirectResponse(_back(back), status_code=303)
+        return RedirectResponse(_with_msg(_back(back), "Marks cleared for this group"), status_code=303)
 
     @app.post("/marks/bulk")
     def marks_bulk(method: str = Form("exact"), category: str = Form(""), q: str = Form(""), min_mb: Annotated[float, Form(ge=0, le=1e9)] = 0,
@@ -974,7 +1043,8 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
             changes.clear_marks(c, None if everything else (file_id or []))
         finally:
             c.close()
-        return RedirectResponse("/changes", status_code=303)
+        return RedirectResponse(_with_msg("/changes", "All marks cleared" if everything else "Kept: no longer marked"),
+                                status_code=303)
 
     @app.get("/changes", response_class=HTMLResponse)
     def changes_page(request: Request, page: Page = 1, msg: str = "", error: str = ""):
@@ -1126,12 +1196,20 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
     def scan_start():
         c = conn()
         try:
-            if db.active_job(c) is None:
-                db.enqueue_job(c, "scan")
+            if not db.get_settings(c)["shares"] and not c.execute(
+                    "SELECT 1 FROM roots WHERE enabled = 1 AND source != 'share' LIMIT 1").fetchone():
+                # Nothing to read: say so instead of a scan that "finishes" at once.
+                return RedirectResponse("/?notice=noshares", status_code=303)
+            if c.execute("SELECT 1 FROM jobs WHERE type = 'scan' AND state IN ('queued', 'running')").fetchone():
+                return RedirectResponse("/", status_code=303)
+            blocker = db.active_job(c)
+            # Another job (a benchmark, a change, regrouping) is running: the scan
+            # waits in the queue behind it instead of being silently dropped.
+            db.enqueue_job(c, "scan")
         finally:
             c.close()
         worker.wake()
-        return RedirectResponse("/", status_code=303)
+        return RedirectResponse("/?notice=queued" if blocker else "/", status_code=303)
 
     @app.post("/scan/pause")
     def scan_pause():
