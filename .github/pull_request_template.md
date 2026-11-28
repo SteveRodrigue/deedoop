@@ -14,4 +14,5 @@
 - [ ] SC8: no secrets in logs, URLs or messages
 - [ ] SC9: new dependencies justified, `make lock` run, pip-audit clean
 - [ ] SC10: security changes have tests that fail without them
+- [ ] Behaviour changes: version bumped and a `CHANGELOG.md` entry added under it
 - [ ] `make ci` passes; screens checked in light and dark, desktop and phone

@@ -10,6 +10,14 @@ make ci      # the full run GitHub does: tests in Docker, pip-audit, image build
 ```
 
 `make ci` needs only Docker. A pull request is merged only when it passes.
+See [docs/development.md](docs/development.md) for running from source and what
+`make ci` checks.
+
+## Changelog and version
+
+A pull request that changes behaviour bumps the version in `pyproject.toml` and
+`deedoop/__init__.py` and adds an entry under that version in
+[CHANGELOG.md](CHANGELOG.md). Ideas for later go in [ROADMAP.md](ROADMAP.md).
 
 ## Security rules
 
