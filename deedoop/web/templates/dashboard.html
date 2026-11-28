@@ -10,6 +10,21 @@
 </section>
 {% endif %}
 
+{% if roots and not benchmarked and not settings.bench_hint_dismissed and not (active and active.type == "benchmark") %}
+<section class="card callout" id="bench-hint">
+  <h2>Benchmark your disks?</h2>
+  <p>deedoop reads one disk at a time, which is safe on any server. A short benchmark (a minute or two) measures
+    whether reading several disks at once would scan faster, then shows its proposal next to your current
+    <a href="/setup#disk-mode">Disk mode</a> settings. Nothing changes until you apply it.</p>
+  <div class="row">
+    <form method="post" action="/setup/benchmark">{% include "_csrf.html" %}<button {{ "disabled" if active }}>Run benchmark</button></form>
+    <form method="post" action="/setup/benchmark/dismiss">{% include "_csrf.html" %}<button class="secondary">Not now</button></form>
+    {% if active %}<span class="muted small">It cannot run during a scan: start it when this one finishes.</span>{% endif %}
+  </div>
+  <p class="muted small">You can run it any time from <a href="/setup#benchmark">Setup</a>.</p>
+</section>
+{% endif %}
+
 {% if raw_only %}
 <p class="flash ok">Raw content only: every scanner is off on the <a href="/setup#scanners">Setup</a> screen, so deedoop finds byte-identical files and nothing else.</p>
 {% endif %}

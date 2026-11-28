@@ -4,10 +4,14 @@
 {% block toasts %}
 {%- set saved_text = {"shares": "Shares saved", "folder": "Folder added", "removed": "Folder removed",
     "settings": "Settings saved", "changes": "Change settings saved", "access": "Access settings saved",
-    "account": "Username changed", "password": "Password changed", "benchmark": "Proposal applied to Disk mode",
-    "bench_started": "Benchmark started"} %}
+    "account": "Username changed", "password": "Password changed",
+    "bench_started": "Benchmark started. It takes a minute or two; the result appears below."} %}
 {% if error %}{{ toast(error, "err") }}{% endif %}
 {% if saved == "changes" and settings.allow_changes and not gate.writable %}{{ toast("Change settings saved, but /mnt is read-only, so deedoop cannot change files yet.", "err") }}
+{% elif saved == "benchmark" %}
+  {%- set ch = (bench_applied or {}).get("changes") or [] -%}
+  {%- if ch %}{{ toast("Proposal applied. " ~ (ch | map("change_text") | join("; ")) ~ ".") }}
+  {%- else %}{{ toast("Nothing changed: Disk mode already matched the proposal.") }}{% endif %}
 {% elif saved %}{{ toast(saved_text.get(saved, "Saved")) }}{% endif %}
 {% endblock %}
 {% block content %}
@@ -133,12 +137,28 @@
 
 <section class="card" id="disk-mode">
   <h2>Disk mode</h2>
+  {% if not bench %}
+  <div class="bench-note" id="disk-mode-bench">
+    <p><strong>Not benchmarked yet.</strong> One disk at a time is a safe default on any server. The
+      <a href="#benchmark">benchmark</a> measures your disks for a minute or two and proposes faster settings if they help;
+      you compare them with these and choose.</p>
+    <button type="submit" form="bench-run" class="secondary" {{ "disabled" if active }}>Run benchmark</button>
+    {% if active %}<span class="muted small">Available when the current {{ "scan" if active.type == "scan" else "job" }} finishes.</span>{% endif %}
+  </div>
+  {% elif bench_rows | selectattr("changed") | list %}
+  <p class="bench-note" id="disk-mode-bench">The benchmark of {{ bench.created_at | time }} proposes different settings.
+    <a href="#benchmark">Compare and apply</a></p>
+  {% else %}
+  <p class="muted small" id="disk-mode-bench"><span class="pill ok">matches</span> These are the settings the benchmark of
+    {{ bench.created_at | time }} proposed{% if bench_applied %}, applied {{ bench_applied.at | time }}{% endif %}.</p>
+  {% endif %}
   <label class="radio"><input type="radio" name="disk_mode" value="single" {{ "checked" if settings.disk_mode == "single" }}>
     One disk at a time <span class="muted small">(default: only one array disk spins and works at once)</span></label>
   <label class="radio"><input type="radio" name="disk_mode" value="parallel" {{ "checked" if settings.disk_mode == "parallel" }}>
     Parallel: read up to <input type="number" name="parallel_disks" min="2" max="32" value="{{ settings.parallel_disks }}"> disks at once</label>
   <label>Hash threads per large file <input type="number" name="hash_threads" min="1" max="64" value="{{ settings.hash_threads }}">
     <span class="muted small">1 suits spinning disks; more helps only on fast SSDs</span></label>
+  <p class="muted small">Changes here are saved with <strong>Save settings</strong> at the end of Schedule, below.</p>
 </section>
 
 <section class="card">
@@ -248,12 +268,12 @@
   <p class="muted">Reads a sample of large files from each selected disk alone, then from 2, 3, … disks at once, and measures
   hashing speed. It only helps tune <a href="#disk-mode">Disk mode</a>: it proposes one disk at a time or parallel,
   how many disks to read together and hash threads per file. Nothing changes until you apply it. Optional: one disk at a time
-  is a safe default. Takes about {{ 10 }} seconds per disk and combination.</p>
+  is a safe default. Takes about {{ 10 }} seconds per disk and combination, and cannot run during a scan.</p>
   {% if active and active.type == "benchmark" %}
     {% include "_status.html" %}
   {% else %}
-    <form method="post" action="/setup/benchmark">{% include "_csrf.html" %}<button {{ "disabled" if active }}>Run benchmark</button></form>
-    {% if active %}<p class="muted small">Wait for the current scan to finish first.</p>{% endif %}
+    <form method="post" action="/setup/benchmark" id="bench-run">{% include "_csrf.html" %}<button {{ "disabled" if active }}>{{ "Run the benchmark again" if bench else "Run benchmark" }}</button></form>
+    {% if active %}<p class="muted small">The benchmark reads the same disks as a scan, so it waits: run it when the current {{ "scan" if active.type == "scan" else "job" }} finishes.</p>{% endif %}
   {% endif %}
   {% if bench %}
   <h3>Last result <span class="muted small">{{ bench.created_at | time }}</span></h3>
@@ -273,10 +293,25 @@
     </table>
   </div>
   <p class="small">CPU: {{ bench.cpus }} cores, BLAKE3 {{ bench.hash_mbps_1_thread }} MB/s on one thread, {{ bench.hash_mbps_all_threads }} MB/s on all.</p>
-  <p><strong>Proposal:</strong>
-    {% if bench.proposal.disk_mode == "parallel" %}parallel, {{ bench.proposal.parallel_disks }} disks at once{% else %}one disk at a time{% endif %},
-    {{ bench.proposal.hash_threads }} hash thread{{ "s" if bench.proposal.hash_threads > 1 }} per file.</p>
-  <form method="post" action="/setup/benchmark/apply">{% include "_csrf.html" %}<button>Apply proposal</button></form>
+
+  <h3 id="proposal">Proposal</h3>
+  {% set to_change = bench_rows | selectattr("changed") | list %}
+  <table class="compare">
+    <thead><tr><th>Disk mode setting</th><th>Now</th><th>Proposed</th><th><span class="sr-only">Change</span></th></tr></thead>
+    {% for r in bench_rows %}
+    <tr class="{{ 'changed' if r.changed }}"><td>{{ r.label }}</td><td>{{ r.current }}</td>
+      <td>{% if r.changed %}<span class="differs">{{ r.proposed }}</span>{% else %}{{ r.proposed }}{% endif %}</td>
+      <td class="small">{% if r.changed %}<span class="pill dup">changes</span>{% else %}<span class="muted">same</span>{% endif %}</td></tr>
+    {% endfor %}
+  </table>
+  {% if to_change %}
+  <form method="post" action="/setup/benchmark/apply" class="row">{% include "_csrf.html" %}
+    <button>Apply {{ to_change | length }} change{{ "s" if to_change | length > 1 }}</button>
+    <span class="muted small">Saves the highlighted settings in Disk mode. You can change them back there at any time.</span></form>
+  {% else %}
+  <p class="muted small"><span class="pill ok">matches</span> Your Disk mode already uses these settings{% if bench_applied %}
+    (applied {{ bench_applied.at | time }}{% if bench_applied.changes %}: {{ bench_applied.changes | map("change_text") | join("; ") }}{% endif %}){% endif %}.</p>
+  {% endif %}
   {% endif %}
 </section>
 {% if signed_in %}

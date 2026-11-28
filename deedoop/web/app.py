@@ -21,7 +21,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from .. import __version__, auth, av, changes, db, media_similar, plans, queries, scanners, similar
+from .. import __version__, auth, av, benchmark, changes, db, media_similar, plans, queries, scanners, similar
 from ..archive_index import refresh_coverage
 from ..archives import read_member_bytes
 from ..buildinfo import REPO_URL, build_info, build_label
@@ -169,6 +169,7 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
     templates.env.filters["bytes"] = human_bytes
     templates.env.filters["time"] = fmt_time
     templates.env.filters["tail"] = tail_path
+    templates.env.filters["change_text"] = lambda ch: f"{ch[0]}: {ch[1]} → {ch[2]}"
     templates.env.globals["version"] = __version__
     templates.env.globals["build"] = build_info()
     templates.env.globals["repo_url"] = REPO_URL
@@ -428,7 +429,8 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
         try:
             stats = queries.index_stats(c, cfg.db_path)
             roots = c.execute("SELECT COUNT(*) FROM roots WHERE enabled = 1").fetchone()[0]
-            return render(request, "dashboard.html", stats=stats, roots=roots,
+            benchmarked = c.execute("SELECT 1 FROM benchmarks LIMIT 1").fetchone() is not None
+            return render(request, "dashboard.html", stats=stats, roots=roots, benchmarked=benchmarked,
                           by_cat=queries.wasted_by_category(c), disks=queries.per_disk(c),
                           settings=(s := db.get_settings(c)), methods_on=scanners.methods(s),
                           raw_only=scanners.raw_only(s), notice=DASHBOARD_NOTICES.get(notice), **job_view(c))
@@ -455,11 +457,15 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
             shares = list_shares(cfg.mnt, disks)
             settings = db.get_settings(c)
             roots = c.execute("SELECT * FROM roots ORDER BY source, path").fetchall()
-            bench = c.execute("SELECT * FROM benchmarks ORDER BY id DESC LIMIT 1").fetchone()
+            bench_row = c.execute("SELECT * FROM benchmarks ORDER BY id DESC LIMIT 1").fetchone()
+            bench = json.loads(bench_row["result"]) if bench_row else None
+            applied = settings["bench_applied"]
             disk_files = {r["disk"]: r["files"] for r in queries.per_disk(c)}
             return render(request, "setup.html", disks=disks, shares=shares, settings=settings,
                           roots=roots, root_counts=queries.root_counts(c), disk_files=disk_files,
-                          bench=json.loads(bench["result"]) if bench else None, error=error, saved=saved,
+                          bench=bench, bench_rows=benchmark.compare(settings, bench["proposal"]) if bench else [],
+                          bench_applied=applied if applied and bench_row and applied.get("bench_id") == bench_row["id"]
+                          else None, error=error, saved=saved,
                           mnt=str(cfg.mnt), exiftool=exiftool_available(), gate=changes.gate(c, cfg.mnt),
                           scanner_rows=scanners.status(settings), raw_only=scanners.raw_only(settings),
                           chromaprint=av.tools_available() and av.chromaprint_available(),
@@ -590,8 +596,11 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
     def setup_benchmark():
         c = conn()
         try:
-            if db.active_job(c) is None:
-                db.enqueue_job(c, "benchmark")
+            if db.active_job(c) is not None:
+                # It reads the same disks as a scan, so the numbers would be wrong.
+                err = "The benchmark cannot run while a scan or another job is running. Run it when that finishes."
+                return RedirectResponse(f"/setup?error={_q(err)}#benchmark", status_code=303)
+            db.enqueue_job(c, "benchmark")
         finally:
             c.close()
         worker.wake()
@@ -601,12 +610,26 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
     def setup_benchmark_apply():
         c = conn()
         try:
-            bench = c.execute("SELECT result FROM benchmarks ORDER BY id DESC LIMIT 1").fetchone()
-            if bench:
-                db.set_settings(c, json.loads(bench["result"])["proposal"])
+            bench = c.execute("SELECT id, result FROM benchmarks ORDER BY id DESC LIMIT 1").fetchone()
+            if not bench:
+                return RedirectResponse(f"/setup?error={_q('Run the benchmark first.')}#benchmark", status_code=303)
+            proposal = json.loads(bench["result"])["proposal"]
+            rows = benchmark.compare(db.get_settings(c), proposal)
+            db.set_settings(c, {**benchmark.proposal_settings(proposal), "bench_applied": {
+                "at": dt.datetime.now().timestamp(), "bench_id": bench["id"],
+                "changes": [[r["label"], r["current"], r["proposed"]] for r in rows if r["changed"]]}})
         finally:
             c.close()
-        return RedirectResponse("/setup?saved=benchmark#benchmark", status_code=303)
+        return RedirectResponse("/setup?saved=benchmark#disk-mode", status_code=303)
+
+    @app.post("/setup/benchmark/dismiss")
+    def setup_benchmark_dismiss():
+        c = conn()
+        try:
+            db.set_settings(c, {"bench_hint_dismissed": True})
+        finally:
+            c.close()
+        return RedirectResponse("/", status_code=303)
 
     @app.get("/duplicates", response_class=HTMLResponse)
     def duplicates(request: Request, method: str = "exact", category: str = "", q: str = "", min_mb: MinMb = 0,
