@@ -30,5 +30,17 @@ def test_footer_shows_the_build(unraid, monkeypatch):
     monkeypatch.setenv("DEEDOOP_COMMIT", "1ae420b")
     monkeypatch.setenv("DEEDOOP_BUILD_DATE", "2026-11-28")
     with make_client(unraid) as client:
-        assert f"deedoop {__version__} (1ae420b, 2026-11-28)" in client.get("/").text
+        page = client.get("/").text
+        assert '<a href="https://github.com/SteveRodrigue/deedoop" rel="noopener noreferrer">deedoop</a> ' + __version__ in page
+        assert 'href="https://github.com/SteveRodrigue/deedoop/commit/1ae420b"' in page and ">1ae420b</a>, 2026-11-28)" in page
         assert client.get("/api/status").json()["build"] == f"{__version__} (1ae420b, 2026-11-28)"
+
+
+def test_footer_links_the_repo_without_build_info(unraid, monkeypatch):
+    from tests.test_web import make_client
+
+    monkeypatch.delenv("DEEDOOP_COMMIT", raising=False)
+    monkeypatch.delenv("DEEDOOP_BUILD_DATE", raising=False)
+    with make_client(unraid) as client:
+        page = client.get("/").text
+        assert f'deedoop</a> {__version__} · dedupe' in page and "/commit/" not in page

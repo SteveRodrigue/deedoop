@@ -60,6 +60,8 @@
 </main>
 <div id="toasts" class="toasts" aria-live="polite">{% block toasts %}{% endblock %}</div>
 {% if nav != "dashboard" %}{% include "_jobbar.html" %}{% endif %}
-<footer>deedoop {{ build }} · dedupe your hoard, safely</footer>
+<footer><a href="{{ repo_url }}" rel="noopener noreferrer">deedoop</a> {{ build.version }}
+  {%- if build.commit or build.date %} ({% if build.commit %}<a href="{{ repo_url }}/commit/{{ build.commit }}" rel="noopener noreferrer" title="The commit this image was built from">{{ build.commit }}</a>{% endif %}
+  {%- if build.commit and build.date %}, {% endif %}{{ build.date }}){% endif %} · dedupe your hoard, safely</footer>
 </body>
 </html>

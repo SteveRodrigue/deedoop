@@ -23,7 +23,7 @@ from fastapi.templating import Jinja2Templates
 from .. import __version__, auth, av, changes, db, media_similar, plans, queries, scanners, similar
 from ..archive_index import refresh_coverage
 from ..archives import read_member_bytes
-from ..buildinfo import build_label
+from ..buildinfo import REPO_URL, build_info, build_label
 from ..categories import CATEGORIES
 from ..config import AppConfig
 from ..config import load as load_config
@@ -135,7 +135,8 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
     templates.env.filters["time"] = fmt_time
     templates.env.filters["tail"] = tail_path
     templates.env.globals["version"] = __version__
-    templates.env.globals["build"] = build_label()
+    templates.env.globals["build"] = build_info()
+    templates.env.globals["repo_url"] = REPO_URL
     templates.env.globals["phase_names"] = PHASE_NAMES
     templates.env.filters["clock"] = lambda ts: dt.datetime.fromtimestamp(ts).strftime("%H:%M:%S") if ts else ""
 
