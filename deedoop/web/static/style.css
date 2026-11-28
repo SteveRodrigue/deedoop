@@ -137,6 +137,10 @@ details.group .wasted { font-weight: 700; min-width: 80px; font-variant-numeric:
 details.group .path { flex: 1; }
 .members .path { max-width: 700px; }
 .pager { display: flex; gap: 16px; justify-content: center; align-items: center; }
+/* Browse: filter lists swapped in after the page, "Show more" under the files */
+.facets { display: contents; }
+.photos .more { grid-column: 1 / -1; text-align: center; padding: 8px 0; }
+tr.more td { text-align: center; padding: 12px 0; }
 /* theme toggle */
 .theme { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; padding: 2px; gap: 2px; }
 .theme button { background: transparent; color: var(--muted); border-radius: 999px; padding: 4px 6px; line-height: 0; }

@@ -494,11 +494,20 @@ def loc_roots(conn: sqlite3.Connection, loc: str) -> tuple[list[int], str]:
 
 
 def _subtree(d: str) -> tuple[str, list]:
-    """SQL matching ``f.dir`` equal to ``d`` or below it, using the index range."""
+    """SQL matching ``f.dir`` equal to ``d`` or below it, as one range of the
+    files index: ``d`` up to ``d0`` ('0' sorts right after '/'), so SQLite reads
+    only that part. Sibling folders such as ``d 2`` sort inside the range too
+    and the last test drops them."""
     if not d:
         return "1", []
-    prefix = d + "/"
-    return "(f.dir = ? OR (f.dir >= ? AND f.dir < ?))", [d, prefix, d + "0"]  # '0' sorts right after '/'
+    return "(f.dir >= ? AND f.dir < ? AND (f.dir = ? OR f.dir >= ?))", [d, d + "0", d, d + "/"]
+
+
+# The unary + keeps SQLite off files_root_state for these two tests: that index
+# leads with (root_id, state, container_id), so it looks like the best match, but
+# it holds every file of a disk in size order and a folder's files are spread all
+# over it. The (root_id, dir, name) index reads just the folder (Browse speed).
+LOOSE = "+f.state = 'present' AND +f.container_id = 0"
 
 
 FILE_COLUMNS = """
@@ -512,11 +521,19 @@ FILE_COLUMNS = """
 
 def _flat_where(flt: BrowseFilter, roots: list[int]) -> tuple[list[str], list]:
     """Filters over a folder and everything below it (the search view)."""
-    from .categories import exts_for
-
     rmarks = ",".join("?" * len(roots))
     sub, sargs = _subtree(flt.dir)
-    where, args = [f"f.root_id IN ({rmarks})", "f.state = 'present'", "f.container_id = 0", sub], roots + sargs
+    where, args = [f"f.root_id IN ({rmarks})", LOOSE, sub], roots + sargs
+    w, a = _filters(flt)
+    return where + w, args + a
+
+
+def _filters(flt: BrowseFilter) -> tuple[list[str], list]:
+    """The search filters alone, without the folder."""
+    from .categories import exts_for
+
+    where: list[str] = []
+    args: list = []
     if flt.q:
         where.append("f.name LIKE ? ESCAPE '\\'")
         args.append("%" + _like_escape(flt.q) + "%")
@@ -610,32 +627,89 @@ def _child_dirs(conn: sqlite3.Connection, root_id: int, prefix: str) -> set[str]
     return out
 
 
-def browse(conn: sqlite3.Connection, flt: BrowseFilter) -> dict:
+Cursor = tuple[str, str, int]   # (dir, name, root id) of the last file shown
 
+
+def _place(flt: BrowseFilter) -> tuple[list[str], list]:
+    """Where the files come from: the folder itself, or with a filter the
+    folder and everything below it."""
+    if not flt.flat:
+        return ["f.dir = ?"], [flt.dir]
+    sub, sargs = _subtree(flt.dir)
+    w, a = _filters(flt)
+    return [sub] + w, sargs + a
+
+
+def _by_date(flt: BrowseFilter) -> bool:
+    return bool(flt.year or flt.camera)
+
+
+def browse(conn: sqlite3.Connection, flt: BrowseFilter, after: Cursor | None = None, skip: int = 0) -> dict:
+    """One page of a folder (or of a search below it), fetched a page at a time.
+
+    Files come in folder and name order, ``per_page`` at a time from where the
+    last page ended (``after``), never by counting pages from the start: each
+    disk of a share reads its next few rows along the (root_id, dir, name)
+    index and the pages merge here, so the first page of a million-file share
+    costs as much as the first page of a small one. ``next`` holds the query
+    values of the following page, or None on the last one. Sorting by date
+    (a year or camera filter) has no such index, so it skips ``skip`` rows."""
     roots, base = loc_roots(conn, flt.loc)
     if not roots:
-        return {"subdirs": [], "files": [], "total": 0, "base": ""}
-    rmarks = ",".join("?" * len(roots))
+        return {"subdirs": [], "files": [], "base": "", "next": None}
     subdirs: list[str] = []
-    if not flt.flat:
+    if not flt.flat and after is None and not skip:
         prefix = flt.dir + "/" if flt.dir else ""
         names: set[str] = set()
         for rid in roots:
             names |= _child_dirs(conn, rid, prefix)
         subdirs = sorted(names, key=str.lower)
-        where, args = [f"f.root_id IN ({rmarks})", "f.state = 'present'", "f.container_id = 0", "f.dir = ?"], \
-            roots + [flt.dir]
+    place, pargs = _place(flt)
+    per = flt.per_page
+    if _by_date(flt):
+        rmarks = ",".join("?" * len(roots))
+        w = " AND ".join([f"f.root_id IN ({rmarks})", LOOSE] + place)
+        rows = conn.execute(  # SC5: constants and ? marks only
+            f"SELECT {FILE_COLUMNS}, f.root_id {BROWSE_JOINS} WHERE {w} "
+            "ORDER BY md.taken_at IS NULL, md.taken_at, f.dir, f.name LIMIT ? OFFSET ?",
+            roots + pargs + [per + 1, max(skip, 0)]).fetchall()
+        nxt = {"skip": skip + per} if len(rows) > per else None
+        rows = rows[:per]
     else:
-        where, args = _flat_where(flt, roots)
-    w = " AND ".join(where)
-    joins = BROWSE_JOINS
-    total = conn.execute(f"SELECT COUNT(*) {joins} WHERE {w}", args).fetchone()[0]
-    order = "md.taken_at IS NULL, md.taken_at, f.dir, f.name" if flt.year or flt.camera else "f.dir, f.name"
-    files = conn.execute(
-        f"SELECT {FILE_COLUMNS} {joins} WHERE {w} ORDER BY {order} LIMIT ? OFFSET ?",
-        args + [flt.per_page, (max(flt.page, 1) - 1) * flt.per_page],
-    ).fetchall()
-    return {"subdirs": subdirs, "files": [_file_view(r) for r in files], "total": total, "base": base}
+        rows = []
+        for rid in roots:
+            w, a = ["f.root_id = ?", LOOSE] + place, [rid] + pargs
+            if after is not None:
+                # A file at the same path on a later disk still comes after the cursor.
+                w.append("(f.dir, f.name) >= (?, ?)" if rid > after[2] else "(f.dir, f.name) > (?, ?)")
+                a += [after[0], after[1]]
+            rows += conn.execute(  # SC5: constants and ? marks only
+                f"SELECT {FILE_COLUMNS}, f.root_id {BROWSE_JOINS} WHERE {' AND '.join(w)} "
+                "ORDER BY f.dir, f.name LIMIT ?", a + [per + 1]).fetchall()
+        rows.sort(key=lambda r: (r["dir"], r["name"], r["root_id"]))  # bytewise, like SQLite's text order
+        nxt = None
+        if len(rows) > per:
+            rows = rows[:per]
+            last = rows[-1]
+            nxt = {"after_dir": last["dir"], "after_name": last["name"], "after_root": last["root_id"]}
+    return {"subdirs": subdirs, "files": [_file_view(r) for r in rows], "base": base, "next": nxt}
+
+
+COUNT_CAP = 100_000
+
+
+def browse_count(conn: sqlite3.Connection, flt: BrowseFilter, cap: int = COUNT_CAP) -> tuple[int, bool]:
+    """How many files the folder or search holds, counting at most ``cap``
+    (True when there are more). Browse asks for it after the page is shown."""
+    roots, _ = loc_roots(conn, flt.loc)
+    if not roots:
+        return 0, False
+    place, pargs = _place(flt)
+    rmarks = ",".join("?" * len(roots))
+    w = " AND ".join([f"f.root_id IN ({rmarks})", LOOSE] + place)
+    n = conn.execute(f"SELECT COUNT(*) FROM (SELECT 1 {BROWSE_JOINS} WHERE {w} LIMIT ?)",  # SC5: constants
+                     roots + pargs + [cap + 1]).fetchone()[0]
+    return min(n, cap), n > cap
 
 
 def _file_view(r: sqlite3.Row) -> dict:
@@ -652,7 +726,22 @@ def _file_view(r: sqlite3.Row) -> dict:
     }
 
 
+_FACETS: dict[str, tuple[tuple, float, dict]] = {}
+FACETS_SECONDS = 300.0
+
+
 def facets(conn: sqlite3.Connection) -> dict:
+    """The choices of Browse's filter lists (years, cameras, artists, codecs).
+
+    Each list reads a whole table (a second or more on a big index), so the
+    result is kept until a scan starts or ends, and for five minutes at most
+    while one runs. Browse loads the lists after the page is shown."""
+    db_file = conn.execute("PRAGMA database_list").fetchone()[2]
+    job = conn.execute("SELECT id, state FROM jobs WHERE type = 'scan' ORDER BY id DESC LIMIT 1").fetchone()
+    key = tuple(job) if job else ()
+    hit = _FACETS.get(db_file)
+    if hit and hit[0] == key and time.monotonic() - hit[1] < FACETS_SECONDS:
+        return hit[2]
     years = [r[0] for r in conn.execute(
         "SELECT DISTINCT substr(taken_at, 1, 4) FROM media WHERE taken_at IS NOT NULL ORDER BY 1 DESC")]
     cameras = [r[0] for r in conn.execute(
@@ -663,7 +752,9 @@ def facets(conn: sqlite3.Connection) -> dict:
     codecs = [r[0] for r in conn.execute(
         "SELECT c FROM (SELECT vcodec AS c FROM av UNION ALL SELECT acodec FROM av) WHERE c IS NOT NULL "
         "GROUP BY c ORDER BY COUNT(*) DESC LIMIT 50")]
-    return {"years": years, "cameras": cameras, "artists": artists, "codecs": codecs, "lengths": LENGTHS}
+    out = {"years": years, "cameras": cameras, "artists": artists, "codecs": codecs, "lengths": LENGTHS}
+    _FACETS[db_file] = (key, time.monotonic(), out)
+    return out
 
 
 def file_detail(conn: sqlite3.Connection, file_id: int) -> dict | None:
@@ -901,7 +992,7 @@ def music(conn: sqlite3.Connection, flt: BrowseFilter) -> dict:
         return {"artists": [], "albums": [], "base": ""}
     sub, sargs = _subtree(flt.dir)
     rmarks = ",".join("?" * len(roots))
-    where = (f"f.root_id IN ({rmarks}) AND f.state = 'present' AND f.container_id = 0 AND {sub} "
+    where = (f"f.root_id IN ({rmarks}) AND {LOOSE} AND {sub} "
              "AND av.kind = 'audio' AND av.error IS NULL")
     args = roots + sargs
     if not flt.artist:
@@ -910,7 +1001,10 @@ def music(conn: sqlite3.Connection, flt: BrowseFilter) -> dict:
                        COUNT(DISTINCT av.album) AS albums, SUM(f.size) AS bytes, SUM(av.duration) AS seconds,
                        SUM(EXISTS (SELECT 1 FROM group_members gm WHERE gm.file_id = f.id)) AS dups
                 FROM files f JOIN av ON av.file_id = f.id WHERE {where}
-                GROUP BY name ORDER BY name = '', name COLLATE NOCASE""",
+                GROUP BY COALESCE(av.album_artist, av.artist, '')
+                ORDER BY COALESCE(av.album_artist, av.artist, '') = '',
+                         COALESCE(av.album_artist, av.artist, '') COLLATE NOCASE""",
+            # Spelled out: "GROUP BY name" meant files.name, one artist per song.
             args).fetchall()
         return {"artists": [dict(r) for r in artists], "albums": [], "base": base}
     rows = conn.execute(

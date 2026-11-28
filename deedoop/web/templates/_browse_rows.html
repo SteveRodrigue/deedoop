@@ -1,0 +1,26 @@
+{# One page of Browse's files: rows of the list, or cards of the thumbnail grid. #}
+{% for f in res.files %}
+{% if view == "grid" %}
+  <div class="photo">
+    <a href="/file/{{ f.id }}">{% if f.thumb %}<img class="thumb m" loading="lazy" src="/thumb/{{ f.id }}" alt="">{% else %}<div class="thumb m"></div>{% endif %}</a>
+    <div class="meta">
+      <div title="{{ f.user_path }}"><a href="/file/{{ f.id }}">{{ f.name }}</a></div>
+      <div class="muted">{{ f.taken_at or (f.mtime | time) }}</div>
+      {% if f.in_group %}<div><span class="pill warn">duplicate</span></div>{% endif %}
+    </div>
+  </div>
+{% else %}
+    <tr>
+      <td>{% if f.thumb %}<img class="thumb s" loading="lazy" src="/thumb/{{ f.id }}?s=160" alt="">{% endif %}</td>
+      <td class="path" title="{{ f.user_path }}"><a href="/file/{{ f.id }}">{{ f.name }}</a></td>
+      {% if flt.flat %}<td class="path muted small" title="{{ f.dir }}">{{ f.dir or "/" }}</td>{% endif %}
+      <td class="num">{{ f.size | bytes }}</td>
+      <td class="small">{{ f.taken_at or "" }}</td>
+      <td class="small">{% if f.artist %}{{ f.artist }}{% if f.album %} · <span class="muted">{{ f.album }}</span>{% endif %}{% else %}{{ f.camera or "" }}{% endif %}</td>
+      <td class="small">{{ f.dims or "" }}{% if f.length %}{{ " · " if f.dims }}{{ f.length }}{% endif %}{% if f.codecs %} <span class="muted">{{ f.codecs }}</span>{% endif %}</td>
+      <td class="small">{{ "yes" if f.gps else "" }}</td>
+      <td class="small muted">{{ f.disk }}</td>
+      <td>{% if f.in_group %}<span class="pill warn">duplicate</span>{% endif %}</td>
+    </tr>
+{% endif %}
+{% endfor %}

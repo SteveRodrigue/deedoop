@@ -15,29 +15,9 @@
       <option value="">All types</option>
       {% for c in categories %}<option value="{{ c }}" {{ "selected" if flt.kind == c }}>{{ c }}</option>{% endfor %}
     </select>
-    <select name="year">
-      <option value="">Any year taken</option>
-      {% for y in facets.years %}<option {{ "selected" if flt.year == y }}>{{ y }}</option>{% endfor %}
-    </select>
-    <select name="camera">
-      <option value="">Any camera</option>
-      {% for c in facets.cameras %}<option {{ "selected" if flt.camera == c }}>{{ c }}</option>{% endfor %}
-    </select>
-    {% if media_on and view != "music" %}
-    <select name="artist" aria-label="Artist">
-      <option value="">Any artist</option>
-      {% for a in facets.artists %}<option {{ "selected" if flt.artist == a }}>{{ a }}</option>{% endfor %}
-    </select>
-    <select name="codec" aria-label="Codec">
-      <option value="">Any codec</option>
-      {% for c in facets.codecs %}<option {{ "selected" if flt.codec == c }}>{{ c }}</option>{% endfor %}
-    </select>
-    <select name="length" aria-label="Length">
-      <option value="">Any length</option>
-      {% for k, v in facets.lengths.items() %}<option value="{{ k }}" {{ "selected" if flt.length == k }}>{{ v[0] }}</option>{% endfor %}
-    </select>
-    {% if flt.album %}<input type="hidden" name="album" value="{{ flt.album }}">{% endif %}
-    {% endif %}
+    {# The filter lists read whole tables, so they arrive just after the page (/browse/facets). #}
+    {% include "_browse_facets.html" %}
+    {% if media_on and view != "music" and flt.album %}<input type="hidden" name="album" value="{{ flt.album }}">{% endif %}
     <label class="radio small"><input type="checkbox" name="no_gps" value="1" {{ "checked" if flt.no_gps }}> No GPS</label>
     <label class="radio small"><input type="checkbox" name="no_date" value="1" {{ "checked" if flt.no_date }}> No date taken</label>
     <label class="radio small"><input type="checkbox" name="dups" value="1" {{ "checked" if flt.dups }}> Duplicates only</label>
@@ -59,8 +39,7 @@
   <p class="small muted">Songs in this folder and below, by artist and album, from their tags.
     {% if artist %}<a href="/browse?loc={{ loc | urlencode }}&dir={{ flt.dir | urlencode }}&view=music">All artists</a>{% endif %}</p>
   {% elif flt.flat %}
-  <p class="small muted">{{ "{:,}".format(res.total) }} files match in this folder and below.
-    {% if res.total %}<a href="{{ reorg }}">Organize these files</a>{% endif %}</p>
+  {% include "_browse_count.html" %}
   {% else %}
     {% if res.subdirs %}
     <div class="folders">
@@ -69,8 +48,7 @@
       {% endfor %}
     </div>
     {% endif %}
-    <p class="small muted">{{ "{:,}".format(res.total) }} files in this folder.
-      <a href="{{ reorg }}">Organize this folder and below</a></p>
+    {% include "_browse_count.html" %}
   {% endif %}
 </section>
 
@@ -115,49 +93,23 @@
 {% endfor %}
 {% endif %}
 {% elif res.files %}
+{% if continued %}<p class="small muted"><a href="/browse?{{ listing }}">← Back to the first files</a></p>{% endif %}
 {% if view == "grid" %}
-<section class="photos">
-  {% for f in res.files %}
-  <div class="photo">
-    <a href="/file/{{ f.id }}">{% if f.thumb %}<img class="thumb m" loading="lazy" src="/thumb/{{ f.id }}" alt="">{% else %}<div class="thumb m"></div>{% endif %}</a>
-    <div class="meta">
-      <div title="{{ f.user_path }}"><a href="/file/{{ f.id }}">{{ f.name }}</a></div>
-      <div class="muted">{{ f.taken_at or (f.mtime | time) }}</div>
-      {% if f.in_group %}<div><span class="pill warn">duplicate</span></div>{% endif %}
-    </div>
-  </div>
-  {% endfor %}
+<section class="photos" id="rows">
+  {% include "_browse_rows.html" %}
+  {% include "_browse_next.html" %}
 </section>
 {% else %}
 <section class="card">
   <table>
     <thead><tr><th></th><th>Name</th>{% if flt.flat %}<th>Folder</th>{% endif %}<th class="num">Size</th><th>Taken</th><th>Camera or artist</th><th>Resolution or length</th><th>GPS</th><th>Disk</th><th></th></tr></thead>
-    {% for f in res.files %}
-    <tr>
-      <td>{% if f.thumb %}<img class="thumb s" loading="lazy" src="/thumb/{{ f.id }}?s=160" alt="">{% endif %}</td>
-      <td class="path" title="{{ f.user_path }}"><a href="/file/{{ f.id }}">{{ f.name }}</a></td>
-      {% if flt.flat %}<td class="path muted small" title="{{ f.dir }}">{{ f.dir or "/" }}</td>{% endif %}
-      <td class="num">{{ f.size | bytes }}</td>
-      <td class="small">{{ f.taken_at or "" }}</td>
-      <td class="small">{% if f.artist %}{{ f.artist }}{% if f.album %} · <span class="muted">{{ f.album }}</span>{% endif %}{% else %}{{ f.camera or "" }}{% endif %}</td>
-      <td class="small">{{ f.dims or "" }}{% if f.length %}{{ " · " if f.dims }}{{ f.length }}{% endif %}{% if f.codecs %} <span class="muted">{{ f.codecs }}</span>{% endif %}</td>
-      <td class="small">{{ "yes" if f.gps else "" }}</td>
-      <td class="small muted">{{ f.disk }}</td>
-      <td>{% if f.in_group %}<span class="pill warn">duplicate</span>{% endif %}</td>
-    </tr>
-    {% endfor %}
+    <tbody id="rows">
+      {% include "_browse_rows.html" %}
+      {% include "_browse_next.html" %}
+    </tbody>
   </table>
 </section>
 {% endif %}
-{% endif %}
-
-{% if pages > 1 %}
-<nav class="pager">
-  {% set base = "/browse?loc=" ~ (loc | urlencode) ~ "&dir=" ~ (flt.dir | urlencode) ~ ("&" ~ filters if filters else "") %}
-  {% if flt.page > 1 %}<a href="{{ base }}&page={{ flt.page - 1 }}">← Previous</a>{% endif %}
-  <span>Page {{ flt.page }} of {{ pages }}</span>
-  {% if flt.page < pages %}<a href="{{ base }}&page={{ flt.page + 1 }}">Next →</a>{% endif %}
-</nav>
 {% endif %}
 {% endif %}
 {% endblock %}

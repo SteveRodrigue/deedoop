@@ -1,0 +1,26 @@
+{# Browse's filter lists. The page first shows each list with only the chosen
+   value, then htmx swaps in the full lists from /browse/facets. #}
+<span class="facets" id="facets"{% if not facets %} hx-get="/browse/facets?{{ listing }}" hx-trigger="load" hx-swap="outerHTML"{% endif %}>
+    <select name="year">
+      <option value="">Any year taken</option>
+      {% for y in (facets.years if facets else ([flt.year] if flt.year else [])) %}<option {{ "selected" if flt.year == y }}>{{ y }}</option>{% endfor %}
+    </select>
+    <select name="camera">
+      <option value="">Any camera</option>
+      {% for c in (facets.cameras if facets else ([flt.camera] if flt.camera else [])) %}<option {{ "selected" if flt.camera == c }}>{{ c }}</option>{% endfor %}
+    </select>
+    {% if media_on and view != "music" %}
+    <select name="artist" aria-label="Artist">
+      <option value="">Any artist</option>
+      {% for a in (facets.artists if facets else ([flt.artist] if flt.artist else [])) %}<option {{ "selected" if flt.artist == a }}>{{ a }}</option>{% endfor %}
+    </select>
+    <select name="codec" aria-label="Codec">
+      <option value="">Any codec</option>
+      {% for c in (facets.codecs if facets else ([flt.codec] if flt.codec else [])) %}<option {{ "selected" if flt.codec == c }}>{{ c }}</option>{% endfor %}
+    </select>
+    <select name="length" aria-label="Length">
+      <option value="">Any length</option>
+      {% for k, v in lengths.items() %}<option value="{{ k }}" {{ "selected" if flt.length == k }}>{{ v[0] }}</option>{% endfor %}
+    </select>
+    {% endif %}
+</span>

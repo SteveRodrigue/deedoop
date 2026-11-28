@@ -1,0 +1,10 @@
+{# "Show more" (the htmx click-to-load pattern): the next page of files takes
+   this control's place, with a new control after it. Without JavaScript the
+   link opens that page on its own. #}
+{% if res.next %}
+{% set nq = listing ~ "&" ~ (res.next | urlencode) %}
+{% set link %}<a class="button secondary" href="/browse?{{ nq }}" hx-get="/browse/more?{{ nq }}" hx-target="closest .more"
+     hx-swap="outerHTML" hx-disabled-elt="this">Show {{ flt.per_page }} more</a>{% endset %}
+{% if view == "grid" %}<div class="more">{{ link }}</div>
+{% else %}<tr class="more"><td colspan="{{ 10 if flt.flat else 9 }}">{{ link }}</td></tr>{% endif %}
+{% endif %}
