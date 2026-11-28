@@ -219,3 +219,39 @@ def disk_paths_for_benchmark(conn, disks) -> dict[str, list[str]]:
             if d.kind in ("array", "pool", "folder"):
                 out[d.name] = [str(d.path)]
     return dict(sorted(out.items(), key=lambda kv: natural_key(kv[0])))
+
+
+# -- comparing a proposal with the Disk mode settings --------------------------
+
+MODE_LABELS = {"single": "One disk at a time", "parallel": "Parallel"}
+
+
+def disk_mode_view(s: dict) -> dict[str, object]:
+    """Disk mode settings as the scan uses them. In single mode the saved
+    'parallel_disks' number is kept for later but not used, so one disk is read."""
+    parallel = s.get("disk_mode") == "parallel"
+    return {"mode": MODE_LABELS["parallel" if parallel else "single"],
+            "disks": int(s.get("parallel_disks", 2)) if parallel else 1,
+            "threads": int(s.get("hash_threads", 1))}
+
+
+ROW_LABELS = (("mode", "Disk mode"), ("disks", "Disks read at once"), ("threads", "Hash threads per large file"))
+
+
+def compare(settings: dict, proposal: dict) -> list[dict[str, object]]:
+    """One row per Disk mode setting: what is saved now, what the benchmark
+    proposes, and whether applying it would change that setting."""
+    now, new = disk_mode_view(settings), disk_mode_view(proposal)
+    return [{"key": k, "label": label, "current": now[k], "proposed": new[k], "changed": now[k] != new[k]}
+            for k, label in ROW_LABELS]
+
+
+def proposal_settings(proposal: dict) -> dict[str, object]:
+    """The settings that applying a proposal writes. A one-disk-at-a-time
+    proposal leaves the saved parallel disk count alone, so switching back to
+    parallel later finds the number the admin chose."""
+    out: dict[str, object] = {"disk_mode": "parallel" if proposal.get("disk_mode") == "parallel" else "single",
+                              "hash_threads": max(1, min(int(proposal.get("hash_threads", 1)), 64))}
+    if out["disk_mode"] == "parallel":
+        out["parallel_disks"] = max(2, min(int(proposal.get("parallel_disks", 2)), 32))
+    return out
