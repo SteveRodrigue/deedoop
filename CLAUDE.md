@@ -22,6 +22,11 @@ are not optional.
   (README, `docs/images`): run `python scripts/screenshots.py` and say so in the PR.
 - Bump the version in `pyproject.toml` and `deedoop/__init__.py` in every PR that
   changes the image, so the footer shows which build is running.
+- Every PR that changes behaviour adds an entry to `CHANGELOG.md` under its
+  version (Keep a Changelog: Added, Changed, Fixed, Removed, Security), with the
+  PR number. Plans and ideas go in `ROADMAP.md`; move them to the changelog when
+  they ship. Keep the README short: feature details go in `docs/features.md`,
+  settings in `docs/configuration.md`, dev notes in `docs/development.md`.
 - Brand: Ledger palette and the deedoop logo (second e and o in the greyed `--copy` tone).
   Design explorations live in `branding/`, which is gitignored: keep design work there.
 
