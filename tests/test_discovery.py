@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from deedoop import db
@@ -53,3 +55,13 @@ def test_custom_root_rules(unraid, conn):
         add_custom_root(conn, unraid.mnt, "relative/path")
     row = conn.execute("SELECT disk, source FROM roots").fetchone()
     assert (row["disk"], row["source"]) == ("disks/usb", "custom")
+
+
+def test_custom_root_containment_is_checked_before_the_filesystem(unraid, conn):
+    """SC7 (code-scanning alert 33): a dot-dot escape or a sibling folder whose
+    name starts with the mount's name is refused, even when it is a real folder."""
+    sibling = Path(str(unraid.mnt) + "-evil")
+    sibling.mkdir()
+    for bad in (str(unraid.mnt / "disks/../../etc"), str(sibling), str(unraid.mnt) + "/../" + sibling.name):
+        with pytest.raises(RootError, match="must be inside"):
+            add_custom_root(conn, unraid.mnt, bad)
