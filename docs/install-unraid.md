@@ -151,6 +151,14 @@ an update. To update:
    deedoop. Or, in the terminal: `docker pull ghcr.io/steverodrigue/deedoop:latest`,
    then edit the container and click **Apply**.
 
+The first start after an update can take a while on a big index: deedoop may
+need to upgrade its database or fold a large write-ahead log back into it,
+which means writing several GB to the appdata disk. Meanwhile the web UI shows
+an **Upgrading the database** page that reloads by itself and says what it is
+doing, and the container log shows each step. Leave it running and **do not
+restart the container**: the work would start over. A scan that was running
+carries on from its phase once deedoop is ready.
+
 Each version is also tagged (`ghcr.io/steverodrigue/deedoop:0.10.0`, …). To stay
 on one, or to roll back, change **Repository** in the template to that tag.
 

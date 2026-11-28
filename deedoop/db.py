@@ -10,6 +10,7 @@ that later milestones fill (``media``, ``sidecars``, ``reviews``,
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import time
 from pathlib import Path
@@ -501,17 +502,39 @@ def shrink_wal(conn: sqlite3.Connection, wait_ms: int = 200) -> bool:
         conn.execute("PRAGMA busy_timeout=60000")
 
 
-def init(path: Path | str) -> None:
+def init(path: Path | str, log: logging.Logger | None = None) -> None:
+    """Create or upgrade the database. On a big index after an upgrade this can
+    take minutes (a large write-ahead log to fold in, new indexes to build), so
+    ``serve`` runs it while the web UI already answers with a waiting page, and
+    each slow step is logged."""
+    log = log or logging.getLogger("deedoop.db")
     Path(path).parent.mkdir(parents=True, exist_ok=True)
+    wal = Path(str(path) + "-wal")
+    try:
+        wal_size = wal.stat().st_size
+    except OSError:
+        wal_size = 0
     conn = connect(path)
     try:
+        if wal_size > WAL_SIZE_LIMIT:
+            started = time.monotonic()
+            log.warning("Folding the %.1f GB write-ahead log into the database (once); this can take several "
+                        "minutes on a slow disk. The web UI shows a waiting page meanwhile.", wal_size / 1e9)
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            log.warning("Write-ahead log folded in after %.0f s", time.monotonic() - started)
         version = conn.execute("PRAGMA user_version").fetchone()[0]
+        if version and version < len(MIGRATIONS):
+            log.warning("Upgrading the database from version %d to %d; on a big index this can take a few "
+                        "minutes.", version, len(MIGRATIONS))
         for i, script in enumerate(MIGRATIONS[version:], start=version + 1):
+            started = time.monotonic()
             conn.execute("BEGIN")
             for stmt in _split(script):
                 conn.execute(stmt)
             conn.execute(f"PRAGMA user_version={i}")
             conn.execute("COMMIT")
+            if version and time.monotonic() - started > 5:
+                log.warning("Database version %d done in %.0f s", i, time.monotonic() - started)
     finally:
         conn.close()
 

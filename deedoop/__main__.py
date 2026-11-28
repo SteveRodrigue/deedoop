@@ -22,6 +22,8 @@ def serve() -> None:
 
     from . import tls
     from .web.app import create_app
+    from .web.startup import StartupGate
+    from .worker import Worker
 
     cfg = load()
     info = tls.prepare(cfg)
@@ -35,7 +37,17 @@ def serve() -> None:
             "your" if info.source == "yours" else "a self-signed", info.fingerprint)
         for p in info.problems:
             logging.getLogger("deedoop.tls").warning("%s", p)
-    uvicorn.run(create_app(cfg, tls_info=info), host=cfg.host, port=cfg.port, log_level="info",
+    worker = Worker(cfg, isolate=True)
+
+    def prepare():
+        # Opening and upgrading the database can take minutes after an update: the
+        # gate answers with a waiting page meanwhile (web/startup.py).
+        app = create_app(cfg, worker=worker, start_worker=False, tls_info=info)
+        worker.start()
+        logging.getLogger("deedoop.startup").info("Ready")
+        return app
+
+    uvicorn.run(StartupGate(prepare, shutdown=worker.shutdown), host=cfg.host, port=cfg.port, log_level="info",
                 access_log=False, server_header=False, **extra)
 
 
