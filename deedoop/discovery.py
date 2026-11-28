@@ -159,9 +159,17 @@ def add_custom_root(conn: sqlite3.Connection, mnt: Path, path_str: str) -> int:
     """Add a folder that is not an Unraid share (for example a folder on an
     unassigned device). It must be inside the read-only mount and must not
     overlap a root already in the index."""
-    path = Path(os.path.normpath(path_str.strip()))
-    if not path.is_absolute():
+    norm = os.path.normpath(path_str.strip())
+    if not os.path.isabs(norm):
         raise RootError("Use an absolute path, for example /mnt/disks/usb/Backups.")
+    # SC7: containment is checked on the normalised string before the path
+    # touches the filesystem (this is the shape CodeQL's py/path-injection
+    # recognises as a guard; the Path.parents check below says the same).
+    mnt_str = os.path.normpath(str(mnt))
+    prefix = mnt_str if mnt_str.endswith(os.sep) else mnt_str + os.sep
+    if not (norm == mnt_str or norm.startswith(prefix)):
+        raise RootError(f"The folder must be inside {mnt}.")
+    path = Path(norm)
     if path != mnt and mnt not in path.parents:
         raise RootError(f"The folder must be inside {mnt}.")
     if is_unraid(mnt) and (path.parts[: len(mnt.parts) + 1] in {(*mnt.parts, "user"), (*mnt.parts, "user0")}):
