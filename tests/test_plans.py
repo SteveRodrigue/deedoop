@@ -128,7 +128,7 @@ def test_pages(unraid, conn, library):
 
     with make_client(unraid) as client:
         r = client.get("/browse?loc=share:Backups")
-        assert "Reorganize this folder" in r.text
+        assert "Organize this folder" in r.text and 'href="/plans" class="on">Organize</a>' not in r.text
         r = client.get("/reorganize?loc=share:Backups&template=Photos/{year}/{month}/{name}")
         assert r.status_code == 200 and "Would move" in r.text and "c (1).jpg" in r.text
         r = client.get("/reorganize?loc=share:Backups&template=Nope/{name}")
@@ -139,7 +139,8 @@ def test_pages(unraid, conn, library):
                                                    "name": "Test plan"})
         assert r.status_code == 200 and "Plan saved" in r.text and "Test plan" in r.text
         pid = conn.execute("SELECT id FROM plans").fetchone()[0]
-        assert "Test plan" in client.get("/plans").text
+        r = client.get("/plans")
+        assert "Test plan" in r.text and 'class="on">Organize</a>' in r.text  # the tab is called Organize, not Plans
         r = client.post(f"/plans/{pid}/recheck")
         assert "every file is unchanged" in r.text
         r = client.get(f"/plans/{pid}/export.csv")
