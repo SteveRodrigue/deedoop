@@ -18,6 +18,8 @@ are not optional.
   `static/app.js`.
 - Every security fix ships with a test that fails without it.
 - Every screen works in light and dark themes and on a phone.
+- Any PR that changes how the UI looks refreshes the affected screenshots
+  (README, `docs/images`): run `python scripts/screenshots.py` and say so in the PR.
 - Bump the version in `pyproject.toml` and `deedoop/__init__.py` in every PR that
   changes the image, so the footer shows which build is running.
 - Brand: Ledger palette and the deedoop logo (second e and o in the greyed `--copy` tone).

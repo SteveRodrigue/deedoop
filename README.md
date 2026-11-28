@@ -13,11 +13,11 @@ deedoop finds the duplicates other tools miss on your Unraid server: identical f
 
 <p>
   <img src="docs/images/dashboard-light.png" alt="Dashboard after a scan: reclaimable space, exact copies, similar photos and disks" width="49%">
-  <img src="docs/images/duplicates-dark.png" alt="Exact copies in the dark theme, with the copy to keep selected in each group" width="49%">
+  <img src="docs/images/duplicates-dark.png" alt="Exact copies in the dark theme, with the copy to keep selected in each group and a running scan in the status bar" width="49%">
 </p>
 <p>
   <img src="docs/images/similar-light.png" alt="Similar photos: resized and recompressed copies side by side, with a suggested keeper" width="73%">
-  <img src="docs/images/phone-dark.png" alt="Duplicates on a phone in the dark theme" width="24%">
+  <img src="docs/images/phone-dark.png" alt="Similar photos on a phone in the dark theme, with the scan status bar" width="24%">
 </p>
 
 ## Status: milestone 8
