@@ -1,0 +1,16 @@
+{# How many files the folder or search holds. A search's count can read much of
+   the index, so the page shows a placeholder and htmx fetches /browse/count. #}
+{% set reorg = "/reorganize?" ~ listing %}
+{% if count %}
+  {% set n, capped = count %}
+  {% if flt.flat %}
+  <p class="small muted" id="count">{{ "{:,}".format(n) }}{{ "+" if capped }} files match in this folder and below.
+    {% if n %}<a href="{{ reorg }}">Organize these files</a>{% endif %}</p>
+  {% else %}
+  <p class="small muted" id="count">{{ "{:,}".format(n) }}{{ "+" if capped }} files in this folder.
+    <a href="{{ reorg }}">Organize this folder and below</a></p>
+  {% endif %}
+{% else %}
+  <p class="small muted" id="count" hx-get="/browse/count?{{ listing }}" hx-trigger="load" hx-swap="outerHTML">Counting the files that match…
+    <a href="{{ reorg }}">Organize these files</a></p>
+{% endif %}

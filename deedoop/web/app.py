@@ -12,6 +12,7 @@ import json
 import warnings
 import zipfile
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated
 
@@ -43,6 +44,40 @@ HERE = Path(__file__).parent
 # Typed, bounded query and form values (SC7).
 Page = Annotated[int, Query(ge=1, le=1_000_000)]
 MinMb = Annotated[float, Query(ge=0, le=1e9)]
+Short = Annotated[str, Query(max_length=300)]  # SC7: names, filters
+
+
+@dataclass
+class BrowseQuery:
+    loc: str = ""
+    dir: str = ""
+    q: str = ""
+    kind: str = ""
+    year: str = ""
+    camera: str = ""
+    no_gps: str = ""
+    no_date: str = ""
+    dups: str = ""
+    view: str = "list"
+    artist: str = ""
+    album: str = ""
+    codec: str = ""
+    length: str = ""
+
+
+def browse_query(loc: Short = "", dir: Annotated[str, Query(max_length=4096)] = "", q: Short = "",
+                 kind: Short = "", year: Short = "", camera: Short = "", no_gps: Short = "", no_date: Short = "",
+                 dups: Short = "", view: Short = "list", artist: Short = "", album: Short = "",
+                 codec: Annotated[str, Query(max_length=40)] = "",
+                 length: Annotated[str, Query(max_length=10)] = "") -> BrowseQuery:
+    return BrowseQuery(loc, dir, q, kind, year, camera, no_gps, no_date, dups,
+                       view if view in ("list", "grid", "music") else "list", artist, album, codec, length)
+
+
+AfterDir = Annotated[str, Query(max_length=4096)]
+AfterName = Annotated[str, Query(max_length=1024)]
+AfterRoot = Annotated[int, Query(ge=0, le=2**62)]
+Skip = Annotated[int, Query(ge=0, le=10_000_000)]
 
 
 def fmt_time(ts: float | None) -> str:
@@ -138,6 +173,7 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
     templates.env.globals["build"] = build_info()
     templates.env.globals["repo_url"] = REPO_URL
     templates.env.globals["phase_names"] = PHASE_NAMES
+    templates.env.globals["lengths"] = queries.LENGTHS
     templates.env.filters["clock"] = lambda ts: dt.datetime.fromtimestamp(ts).strftime("%H:%M:%S") if ts else ""
 
     def conn():
@@ -602,38 +638,91 @@ def create_app(cfg: AppConfig | None = None, worker: Worker | None = None, start
         finally:
             c.close()
 
+    # Browse answers at once and fetches the rest as it is needed: the first
+    # page of files comes with the page, the next ones a page at a time ("Show
+    # more"), and the file count and the filter lists right after the page is
+    # shown (each can read much of a big index).
+
+    def browse_filter(c, bq: BrowseQuery) -> tuple[list[dict], str, queries.BrowseFilter]:
+        locs = queries.locations(c)
+        loc = bq.loc or (locs[0]["key"] if locs else "")
+        flt = queries.BrowseFilter(loc=loc, dir=bq.dir.strip("/"), q=bq.q, kind=bq.kind, year=bq.year,
+                                   camera=bq.camera, no_gps=bool(bq.no_gps), no_date=bool(bq.no_date),
+                                   dups=bool(bq.dups), artist="" if bq.view == "music" else bq.artist,
+                                   album=bq.album, codec=bq.codec, length=bq.length)
+        return locs, loc, flt
+
+    def browse_qs(bq: BrowseQuery, loc: str, flt: queries.BrowseFilter) -> tuple[str, str]:
+        """The filters as a query string, and the whole query of this listing."""
+        filters = _q_params(q=bq.q, kind=bq.kind, year=bq.year, camera=bq.camera, no_gps=bq.no_gps,
+                            no_date=bq.no_date, dups=bq.dups, artist=flt.artist, album=bq.album, codec=bq.codec,
+                            length=bq.length, view=bq.view if bq.view != "list" else "")
+        return filters, _q_params(loc=loc, dir=flt.dir) + ("&" + filters if filters else "")
+
+    def browse_cursor(after_dir: str, after_name: str, after_root: int, skip: int):
+        return (after_dir, after_name, after_root) if after_root else None, skip
+
     @app.get("/browse", response_class=HTMLResponse)
-    def browse(request: Request, loc: str = "", dir: str = "", q: str = "", kind: str = "", year: str = "",
-               camera: str = "", no_gps: str = "", no_date: str = "", dups: str = "", page: Page = 1,
-               view: str = "list", artist: Annotated[str, Query(max_length=300)] = "",
-               album: Annotated[str, Query(max_length=300)] = "", codec: Annotated[str, Query(max_length=40)] = "",
-               length: Annotated[str, Query(max_length=10)] = ""):
-        view = view if view in ("list", "grid", "music") else "list"
+    def browse(request: Request, bq: Annotated[BrowseQuery, Depends(browse_query)], after_dir: AfterDir = "",
+               after_name: AfterName = "", after_root: AfterRoot = 0, skip: Skip = 0):
         c = conn()
         try:
-            locs = queries.locations(c)
-            if not loc and locs:
-                loc = locs[0]["key"]
-            music_view = view == "music"
-            flt = queries.BrowseFilter(loc=loc, dir=dir.strip("/"), q=q, kind=kind, year=year, camera=camera,
-                                       no_gps=bool(no_gps), no_date=bool(no_date), dups=bool(dups), page=page,
-                                       artist="" if music_view else artist, album=album, codec=codec,
-                                       length=length)
-            res = queries.browse(c, flt) if not music_view else {"subdirs": [], "files": [], "total": 0,
-                                                                  "base": queries.loc_roots(c, loc)[1]}
-            music = queries.music(c, queries.BrowseFilter(loc=loc, dir=flt.dir, artist=artist)) if music_view else None
+            locs, loc, flt = browse_filter(c, bq)
+            music_view = bq.view == "music"
+            after, skip = browse_cursor(after_dir, after_name, after_root, skip)
+            res = queries.browse(c, flt, after, skip) if not music_view else {
+                "subdirs": [], "files": [], "next": None, "base": queries.loc_roots(c, loc)[1]}
+            music = queries.music(c, queries.BrowseFilter(loc=loc, dir=flt.dir, artist=bq.artist)) \
+                if music_view else None
             crumbs, acc = [], []
             for part in flt.dir.split("/") if flt.dir else []:
                 acc.append(part)
                 crumbs.append((part, "/".join(acc)))
-            filters = _q_params(q=q, kind=kind, year=year, camera=camera, no_gps=no_gps, no_date=no_date,
-                                dups=dups, artist=flt.artist, album=album, codec=codec, length=length,
-                                view=view if view != "list" else "")
+            filters, listing = browse_qs(bq, loc, flt)
+            # A folder's own count is one short range of the index; a search's comes later.
+            count = queries.browse_count(c, flt) if not flt.flat and not music_view else None
             s = db.get_settings(c)
             return render(request, "browse.html", locs=locs, flt=flt, res=res, crumbs=crumbs,
-                          facets=queries.facets(c), categories=CATEGORIES, view=view, filters=filters,
-                          pages=max(1, -(-res["total"] // flt.per_page)), loc=loc, music=music, artist=artist,
+                          categories=CATEGORIES, view=bq.view, filters=filters, listing=listing, loc=loc,
+                          music=music, artist=bq.artist, count=count, continued=bool(after or skip),
                           media_on=bool(scanners.media_kinds(s)), audio_on=scanners.active(s, "audio"))
+        finally:
+            c.close()
+
+    @app.get("/browse/more", response_class=HTMLResponse)
+    def browse_more(request: Request, bq: Annotated[BrowseQuery, Depends(browse_query)], after_dir: AfterDir = "",
+                    after_name: AfterName = "", after_root: AfterRoot = 0, skip: Skip = 0):
+        """The next page of files, added under the ones shown."""
+        c = conn()
+        try:
+            _locs, loc, flt = browse_filter(c, bq)
+            res = queries.browse(c, flt, *browse_cursor(after_dir, after_name, after_root, skip))
+            _filters, listing = browse_qs(bq, loc, flt)
+            return templates.TemplateResponse(request, "_browse_more.html", {
+                "res": res, "flt": flt, "view": bq.view, "listing": listing})
+        finally:
+            c.close()
+
+    @app.get("/browse/count", response_class=HTMLResponse)
+    def browse_count(request: Request, bq: Annotated[BrowseQuery, Depends(browse_query)]):
+        c = conn()
+        try:
+            _locs, loc, flt = browse_filter(c, bq)
+            n, more = queries.browse_count(c, flt)
+            _filters, listing = browse_qs(bq, loc, flt)
+            return templates.TemplateResponse(request, "_browse_count.html", {
+                "count": (n, more), "flt": flt, "listing": listing})
+        finally:
+            c.close()
+
+    @app.get("/browse/facets", response_class=HTMLResponse)
+    def browse_facets(request: Request, bq: Annotated[BrowseQuery, Depends(browse_query)]):
+        c = conn()
+        try:
+            _locs, _loc, flt = browse_filter(c, bq)
+            s = db.get_settings(c)
+            return templates.TemplateResponse(request, "_browse_facets.html", {
+                "facets": queries.facets(c), "flt": flt, "view": bq.view, "media_on": bool(scanners.media_kinds(s))})
         finally:
             c.close()
 
