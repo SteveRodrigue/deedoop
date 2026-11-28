@@ -151,7 +151,7 @@ an update. To update:
    deedoop. Or, in the terminal: `docker pull ghcr.io/steverodrigue/deedoop:latest`,
    then edit the container and click **Apply**.
 
-Each version is also tagged (`ghcr.io/steverodrigue/deedoop:0.9.0`, …). To stay
+Each version is also tagged (`ghcr.io/steverodrigue/deedoop:0.10.0`, …). To stay
 on one, or to roll back, change **Repository** in the template to that tag.
 
 ## Staying signed in

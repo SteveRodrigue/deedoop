@@ -61,7 +61,9 @@ full() {
   docker build "${BUILD_OPTS[@]}" -f "$DOCKERFILE" --target test -t "$IMAGE-test" .
   audit
   step "image"
-  docker build "${BUILD_OPTS[@]}" -f "$DOCKERFILE" -t "$IMAGE" .
+  docker build "${BUILD_OPTS[@]}" -f "$DOCKERFILE" -t "$IMAGE" \
+    --build-arg DEEDOOP_COMMIT="$(git rev-parse --short=7 HEAD 2>/dev/null || true)" \
+    --build-arg DEEDOOP_BUILD_DATE="$(date -u +%Y-%m-%d)" .
   trivy
   smoke
   step "all checks passed"
