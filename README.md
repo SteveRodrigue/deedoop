@@ -73,7 +73,7 @@ deedoop is not in Community Applications yet, and its image is private: install 
 4. Still in the terminal, copy [`unraid/deedoop.xml`](unraid/deedoop.xml) to `/boot/config/plugins/dockerMan/templates-user/my-deedoop.xml`.
 5. In the web UI's Docker tab, click **Add Container**, pick **deedoop**, check the paths and click **Apply**.
 6. Open the container's **Logs** and copy the setup code, then open `http://<server>:8080` (`https://` if you turned on HTTPS), enter the code and create the admin account. (Or set **Admin password (first run only)** in the template.)
-7. Go to **Setup**, tick your shares, then start a scan from the **Dashboard**.
+7. Go to **Setup**, tick your shares, then start a scan from the **Dashboard**. The first scan reads every file once and can take many hours, even days, on a large array; it runs in the background and can be paused. Later scans only read new and changed files.
 
 The template maps:
 

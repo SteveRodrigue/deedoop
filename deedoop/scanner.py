@@ -25,6 +25,8 @@ BATCH_ROWS = 5000
 @dataclass
 class WalkResult:
     files: int = 0
+    bytes: int = 0
+    dirs: int = 0
     new: int = 0
     changed: int = 0
     unreadable_dirs: int = 0
@@ -125,7 +127,7 @@ def walk_root(
     stack = [""]
     base = root["path"]
     status.disk(disk, current=base)
-    reported = (0, 0, 0)
+    reported = (0, 0, 0, 0, 0)
     try:
         while stack:
             control.checkpoint()
@@ -162,6 +164,9 @@ def walk_root(
                 if not stat.S_ISREG(st.st_mode):
                     continue  # symlinks, sockets, devices
                 res.files += 1
+                res.bytes += st.st_size
+                if res.files % REPORT_EVERY == 0:  # a big folder still shows progress
+                    reported = _report(status, disk, abs_dir, res, reported)
                 k = known.get(e.name)
                 if k is None:
                     res.new += 1
@@ -180,6 +185,7 @@ def walk_root(
                 else:
                     w.touches.append((run_id, st.st_nlink, k["id"]))
             stack.extend(sorted(subdirs, reverse=True))
+            res.dirs += 1
             w.maybe_flush()
             reported = _report(status, disk, abs_dir, res, reported)
         w.flush()
@@ -203,10 +209,13 @@ def walk_root(
     return res
 
 
+REPORT_EVERY = 500
+
+
 def _report(status: Status, disk: str, current: str, res: WalkResult, last: tuple) -> tuple:
-    now = (res.files, res.new, res.changed)
-    status.add(disk, "walked", now[0] - last[0])
-    status.add(disk, "new", now[1] - last[1])
-    status.add(disk, "changed", now[2] - last[2])
+    now = (res.files, res.new, res.changed, res.bytes, res.dirs)
+    for key, a, b in zip(("walked", "new", "changed", "walked_bytes", "walked_dirs"), now, last, strict=True):
+        if a != b:
+            status.add(disk, key, a - b)
     status.disk(disk, current=current)
     return now

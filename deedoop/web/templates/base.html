@@ -59,6 +59,7 @@
 {% block content %}{% endblock %}
 </main>
 <div id="toasts" class="toasts" aria-live="polite">{% block toasts %}{% endblock %}</div>
+{% if nav != "dashboard" %}{% include "_jobbar.html" %}{% endif %}
 <footer>deedoop {{ version }} · dedupe your hoard, safely</footer>
 </body>
 </html>

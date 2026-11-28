@@ -347,3 +347,15 @@ audio.player { height: 40px; }
   .toasts { bottom: auto; top: max(12px, env(safe-area-inset-top)); left: 12px; right: 12px; transform: none; width: auto; max-width: none; }
   @keyframes toast-in { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: none; } }
 }
+/* Status bar: the running job, at the bottom of every page but the dashboard. */
+.jobbar { position: sticky; bottom: 0; z-index: 5; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px;
+  max-width: 1200px; margin: 0 auto; padding: 8px 16px; background: var(--card); border-top: 1px solid var(--line);
+  box-shadow: 0 -2px 8px rgba(0, 0, 0, .06); font-size: 14px; }
+.jobbar.idle { display: none; }
+.jobbar progress { width: 120px; }
+.jobbar-link { margin-left: auto; }
+@media (max-width: 640px) { .jobbar progress { width: 80px; } .jobbar { font-size: 13px; } }
+/* Live paths: keep the end (the file name) when the column is too narrow; the ellipsis goes on the left. */
+.path.tail { direction: rtl; text-align: left; }
+/* With the status bar showing, a toast at the bottom sits above it, not on it. */
+@media (min-width: 641px) { body:has(.jobbar:not(.idle)) .toasts { bottom: 72px; } }

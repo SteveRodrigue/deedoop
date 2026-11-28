@@ -19,7 +19,9 @@ import logging
 import os
 import re
 import sqlite3
+import threading
 import time
+import warnings
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -35,7 +37,7 @@ from .archive_index import (
     refresh_coverage,
 )
 from .categories import group_category
-from .control import Control, Status, fmt_bytes
+from .control import Control, JobProblem, Status, fmt_bytes
 from .discovery import natural_key, sync_share_roots
 from .hashing import Expected, FileChanged, full_hash, partial_hash
 from .imaging import IMAGE_HASH_EXTS, MAX_IMAGE_BYTES, NotAnImage, read_and_hash_image, read_image_bytes
@@ -117,12 +119,41 @@ class Scan:
         _save_cursor(self.conn, ctx.job_id, {"phase": phase + "_done"})
 
 
+# -- Pillow's warnings about damaged metadata ------------------------------------------
+# Pillow warns (to stderr, once per message, with no file name) when a photo's EXIF
+# block is truncated or malformed. The picture itself is usually fine. A scan sends
+# them to the scan log instead, once per file and with its path, so they can be
+# found; the container log stays readable.
+
+_reading = threading.local()
+_show_warning = warnings.showwarning
+
+
+def _route_warning(message, category, filename, lineno, file=None, line=None):  # noqa: ANN001 - warnings API
+    path, status = getattr(_reading, "path", None), getattr(_reading, "status", None)
+    if path and status is not None and issubclass(category, UserWarning) and f"{os.sep}PIL{os.sep}" in filename:
+        if getattr(_reading, "warned", None) != path:
+            _reading.warned = path
+            status.log("warn", f"{path}: damaged metadata ({str(message).strip()}); the picture itself was read")
+        return
+    _show_warning(message, category, filename, lineno, file, line)
+
+
+def _route_pillow_warnings() -> None:
+    warnings.filterwarnings("always", category=UserWarning, module=r"PIL\.")
+    warnings.showwarning = _route_warning
+
+
 def run_scan(ctx: ScanContext) -> dict:
+    _route_pillow_warnings()
     conn = db.connect(ctx.db_path)
     try:
         sync_share_roots(conn, ctx.mnt)
         settings = db.get_settings(conn)
         roots = conn.execute("SELECT * FROM roots WHERE enabled = 1 ORDER BY path").fetchall()
+        if not roots:
+            raise JobProblem("Nothing to scan: no share or folder is selected. Tick the shares to scan "
+                             "on the Setup screen, save, then start the scan again.")
         disks = _disks_in_order(roots)
         st = ctx.status
         on = scanners.active_keys(settings)
@@ -425,6 +456,7 @@ def _hash_disk(ctx: ScanContext, disk: str, phase: str, rows: list[sqlite3.Row],
                 continue
             path = os.path.join(row["root_path"], row["dir"], row["name"])
             st.disk(disk, current=path)
+            _reading.path, _reading.status = path, st
             exp = Expected(row["size"], row["mtime_ns"])
             try:
                 if phase == "hash_similar":

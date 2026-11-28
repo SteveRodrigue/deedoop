@@ -6,6 +6,7 @@
 <section class="card">
   <h2>Status</h2>
   <p>{% if status.scanning %}<span class="pill ok">scanning</span> A scan is running.
+     {% elif status.scan_queued %}<span class="pill">queued</span> A scan starts as soon as the current job finishes.
      {% elif status.busy %}<span class="pill ok">working</span> A job is running.
      {% elif status.last_scan %}Last scan finished {{ status.last_scan | time }}{% if status.last_state and status.last_state != "done" %} ({{ status.last_state }}){% endif %}.
      {% else %}No scan yet.{% endif %}</p>

@@ -7,6 +7,7 @@ import io
 import json
 import os
 import sqlite3
+import time
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,8 +20,9 @@ from .scanners import METHOD_LABELS
 
 def index_stats(conn: sqlite3.Connection, db_path: Path) -> dict:
     row = conn.execute(
+        # files_root_state covers this: one pass over a narrow index, not the whole table (UI speed)
         """SELECT COUNT(*) AS files, COALESCE(SUM(f.size), 0) AS bytes
-           FROM files f JOIN roots r ON r.id = f.root_id
+           FROM roots r CROSS JOIN files f INDEXED BY files_root_state ON f.root_id = r.id
            WHERE f.state = 'present' AND r.enabled = 1 AND f.container_id = 0"""
     ).fetchone()
     g = conn.execute(
@@ -49,7 +51,7 @@ def index_stats(conn: sqlite3.Connection, db_path: Path) -> dict:
     errors = conn.execute("SELECT COUNT(*) FROM files WHERE error IS NOT NULL AND state = 'present'").fetchone()[0]
     arch = conn.execute(
         "SELECT COUNT(*), COALESCE(SUM(a.members), 0), COALESCE(SUM(a.cov_new), 0) FROM archives a "
-        "JOIN files f ON f.id = a.file_id WHERE f.state = 'present' AND f.container_id = 0"
+        "CROSS JOIN files f ON f.id = a.file_id WHERE f.state = 'present' AND f.container_id = 0"
     ).fetchone()
     size = 0
     for suffix in ("", "-wal", "-shm"):
@@ -60,7 +62,7 @@ def index_stats(conn: sqlite3.Connection, db_path: Path) -> dict:
     return {
         "files": row["files"], "bytes": row["bytes"], "groups": g["groups"], "wasted": g["wasted"],
         "dup_files": g["dup_files"], "built_at": g["built_at"], "full_hashed": hashed,
-        "errors": errors, "index_bytes": size,
+        "errors": errors, "index_bytes": size, "appdata_bytes": appdata_bytes(Path(db_path).parent),
         "image_groups": gi["groups"], "image_wasted": gi["wasted"], "total_wasted": total,
         "media_groups": gm["groups"], "media_wasted": gm["wasted"], "videos": avc[0], "songs": avc[1],
         "media": media[0], "media_dated": media[1],
@@ -69,6 +71,36 @@ def index_stats(conn: sqlite3.Connection, db_path: Path) -> dict:
         "media_similar_pending": gms["pending"],
         "archives": arch[0], "archive_members": arch[1], "archive_new": arch[2],
     }
+
+
+_APPDATA_CACHE: dict[str, tuple[float, int]] = {}
+APPDATA_CACHE_SECONDS = 60.0
+
+
+def appdata_bytes(config_dir: Path) -> int:
+    """Everything deedoop keeps in its appdata folder: the index, the thumbnail
+    cache and the TLS files. Walked at most once a minute, since the dashboard
+    asks on every load and the thumbnail cache can hold many small files."""
+    key, now = str(config_dir), time.monotonic()
+    hit = _APPDATA_CACHE.get(key)
+    if hit and now - hit[0] < APPDATA_CACHE_SECONDS:
+        return hit[1]
+    total, stack = 0, [key]
+    while stack:
+        try:
+            with os.scandir(stack.pop()) as it:
+                for e in it:
+                    try:
+                        if e.is_dir(follow_symlinks=False):
+                            stack.append(e.path)
+                        elif e.is_file(follow_symlinks=False):
+                            total += e.stat(follow_symlinks=False).st_size
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+    _APPDATA_CACHE[key] = (now, total)
+    return total
 
 
 # Exact groups that an image or media group already covers would count the
@@ -94,9 +126,11 @@ def wasted_by_category(conn: sqlite3.Connection) -> list[sqlite3.Row]:
 
 def per_disk(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return conn.execute(
-        """SELECT r.disk, COUNT(f.id) AS files, COALESCE(SUM(f.size), 0) AS bytes,
-                  MAX(r.last_scan_at) AS last_scan_at, COUNT(DISTINCT r.id) AS roots
-           FROM roots r LEFT JOIN files f ON f.root_id = r.id AND f.state = 'present' AND f.container_id = 0
+        """SELECT r.disk, COALESCE(SUM(c.files), 0) AS files, COALESCE(SUM(c.bytes), 0) AS bytes,
+                  MAX(r.last_scan_at) AS last_scan_at, COUNT(*) AS roots
+           FROM roots r LEFT JOIN (
+               SELECT root_id, COUNT(*) AS files, SUM(size) AS bytes FROM files INDEXED BY files_root_state
+               WHERE state = 'present' AND container_id = 0 GROUP BY root_id) c ON c.root_id = r.id
            WHERE r.enabled = 1 GROUP BY r.disk"""
     ).fetchall()
 
@@ -105,7 +139,8 @@ def root_counts(conn: sqlite3.Connection) -> dict[int, int]:
     return {
         r[0]: r[1]
         for r in conn.execute(
-            "SELECT root_id, COUNT(*) FROM files WHERE state = 'present' AND container_id = 0 GROUP BY root_id")
+            "SELECT root_id, COUNT(*) FROM files INDEXED BY files_root_state "
+            "WHERE state = 'present' AND container_id = 0 GROUP BY root_id")
     }
 
 
@@ -541,6 +576,40 @@ def selection(conn: sqlite3.Connection, flt: BrowseFilter, limit: int = 0) -> li
         args).fetchall()
 
 
+def _child_dirs(conn: sqlite3.Connection, root_id: int, prefix: str) -> set[str]:
+    """The folder names right below ``prefix`` ('' or 'a/b/') in one root.
+
+    It hops from one child folder to the next along the files index, so it
+    costs a few lookups per child folder however many files lie below them.
+    (Reading every file of a share to list its top folders took seconds on a
+    big array, and longer while a scan was writing.) Text sorts bytewise:
+    everything inside ``child/`` lies between ``child/`` and ``child0``, while
+    names such as ``child b`` sort between ``child`` and ``child/``."""
+    upper = prefix[:-1] + "0" if prefix else None   # just past every 'prefix...' (the '/' + 1 trick)
+    sql = ("SELECT dir FROM files WHERE root_id = ? AND dir > ? {lt} AND state = 'present' AND container_id = 0 "
+           "ORDER BY dir LIMIT 1")
+
+    def first_after(low: str, high: str | None, inclusive: bool = False) -> str | None:
+        q = sql.replace("dir > ?", "dir >= ?") if inclusive else sql
+        q = q.format(lt="AND dir < ?" if high is not None else "")
+        row = conn.execute(q, (root_id, low) + ((high,) if high is not None else ())).fetchone()
+        return row[0] if row else None
+
+    out: set[str] = set()
+    d = first_after(prefix, upper, inclusive=bool(prefix))
+    while d is not None:
+        if d == prefix[:-1] or not d.startswith(prefix):  # the folder itself
+            d = first_after(d, upper)
+            continue
+        child = d[len(prefix):].split("/", 1)[0]
+        out.add(child)
+        here = prefix + child
+        # Inside child/: hop past all of it. Else the next folder, which may be a
+        # sibling such as "child b" (and child/... comes after it, hopped then).
+        d = first_after(here + "0", upper, inclusive=True) if d != here else first_after(d, upper)
+    return out
+
+
 def browse(conn: sqlite3.Connection, flt: BrowseFilter) -> dict:
 
     roots, base = loc_roots(conn, flt.loc)
@@ -550,18 +619,10 @@ def browse(conn: sqlite3.Connection, flt: BrowseFilter) -> dict:
     subdirs: list[str] = []
     if not flt.flat:
         prefix = flt.dir + "/" if flt.dir else ""
-        n = len(prefix) + 1
-        rng, rargs = ("f.dir >= ? AND f.dir < ?", [prefix, flt.dir + "0"]) if flt.dir else ("f.dir != ''", [])
-        subdirs = sorted(
-            {r[0] for r in conn.execute(
-                f"""SELECT DISTINCT CASE WHEN instr(substr(f.dir, {n}), '/') > 0
-                          THEN substr(substr(f.dir, {n}), 1, instr(substr(f.dir, {n}), '/') - 1)
-                          ELSE substr(f.dir, {n}) END
-                    FROM files f WHERE f.root_id IN ({rmarks}) AND f.state = 'present' AND f.container_id = 0
-                      AND {rng}""",
-                roots + rargs)},
-            key=str.lower,
-        )
+        names: set[str] = set()
+        for rid in roots:
+            names |= _child_dirs(conn, rid, prefix)
+        subdirs = sorted(names, key=str.lower)
         where, args = [f"f.root_id IN ({rmarks})", "f.state = 'present'", "f.container_id = 0", "f.dir = ?"], \
             roots + [flt.dir]
     else:

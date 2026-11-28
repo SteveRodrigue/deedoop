@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Dashboard · deedoop{% endblock %}
 {% block content %}
+{% if notice %}<p class="flash {{ notice[0] }}" role="status">{{ notice[1] }}{% if notice[0] == "err" %} <a href="/setup">Go to Setup</a>{% endif %}</p>{% endif %}
 {% if not roots %}
 <section class="card callout">
   <h2>Welcome to deedoop</h2>
@@ -35,7 +36,8 @@
   {% if stats.archives %}<div class="tile"><a href="/archives" class="label">Archives</a><div class="value">{{ "{:,}".format(stats.archives) }}</div>
     <div class="muted small">{{ "{:,}".format(stats.archive_members) }} files inside, {{ "{:,}".format(stats.archive_new) }} not on disk yet</div></div>{% endif %}
   <div class="tile"><div class="label">Index size</div><div class="value">{{ stats.index_bytes | bytes }}</div>
-    <div class="muted small">{{ "{:,}".format(stats.full_hashed) }} files fully hashed</div></div>
+    <div class="muted small">{{ "{:,}".format(stats.full_hashed) }} files fully hashed</div>
+    <div class="muted small" title="The index database plus the thumbnail cache and TLS files in /config">All appdata: {{ stats.appdata_bytes | bytes }}</div></div>
 </section>
 
 <div class="cols">

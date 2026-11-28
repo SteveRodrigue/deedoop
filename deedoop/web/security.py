@@ -118,7 +118,11 @@ def _to_login(request: Request) -> HTTPException:
         nxt = safe_next(urlsplit(request.headers.get("referer", "")).path or "/")
     if not _wants_html(request):
         return HTTPException(401, "Sign in to do this.")
-    return HTTPException(303, headers={"Location": "/login?next=" + quote(safe_next(nxt), safe="/")})
+    where = "/login?next=" + quote(safe_next(nxt), safe="/")
+    if request.method not in SAFE_METHODS:
+        # A button pressed while signed out (or after the session ended) did nothing: say so.
+        where += "&error=" + quote("You are signed out, so that was not done. Sign in, then try again.")
+    return HTTPException(303, headers={"Location": where})
 
 
 class Guard:
